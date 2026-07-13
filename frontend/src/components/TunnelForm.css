@@ -1,0 +1,92 @@
+/* Center the form on the page */
+body {
+  background: linear-gradient(135deg, #e0f7fa, #f1f8e9); /* soft gradient */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: 'Roboto', sans-serif;
+  margin: 0;
+}
+
+/* Form container */
+.tunnel-form-container {
+  width: 100%;
+  max-width: 520px;
+  padding: 2rem;
+  background: #ffffffcc; /* semi-transparent mild white */
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  color: #333;
+  backdrop-filter: blur(10px);
+}
+
+/* Headline */
+.tunnel-form-container h5 {
+  text-align: center;
+  color: #00796b;
+  margin-bottom: 1.5rem;
+}
+
+/* TextFields */
+.MuiTextField-root {
+  margin-bottom: 1rem;
+}
+
+.MuiInputBase-root {
+  background: #f0f0f0;
+  color: #333;
+  border-radius: 12px;
+  padding: 6px 12px;
+  transition: all 0.3s ease;
+  border: 1px solid #ccc;
+}
+
+.MuiInputBase-root:hover {
+  border-color: #00796b;
+}
+
+.Mui-focused.MuiInputBase-root {
+  border-color: #f9a825;
+  box-shadow: 0 0 5px rgba(249, 168, 37, 0.5);
+}
+
+/* Helper text */
+.MuiFormHelperText-root {
+  color: #555;
+  font-size: 0.8rem;
+  margin-top: 2px;
+}
+
+/* Keys display box */
+.key-box {
+  margin: 1rem 0;
+  padding: 0.8rem;
+  border: 1px dashed #ccc;
+  border-radius: 12px;
+  background: #f5f5f5;
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 12px;
+  color: #00796b;
+}
+
+/* Submit button */
+.tunnel-submit-btn {
+  margin-top: 1rem;
+  background: linear-gradient(90deg, #4db6ac, #fdd835);
+  color: #333;
+  font-weight: bold;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.tunnel-submit-btn:hover {
+  background: linear-gradient(90deg, #fdd835, #4db6ac);
+  transform: scale(1.03);
+}
+
+/* Error alert */
+.MuiAlert-root {
+  margin-bottom: 1rem;
+}
