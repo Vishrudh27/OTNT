@@ -8,27 +8,36 @@
  *   4. Dual-condition expiry monitoring (time OR data volume)
  *   5. Manual/automatic tunnel teardown + crash-recovery cleanup
  *
- * SECURITY FIX (previous revision):
+ * SECURITY FIX (earlier revision):
  * The backend NEVER generates or stores a WireGuard PRIVATE key on behalf of
  * the client. The client generates its own WireGuard keypair in the browser
  * and only ever sends the PUBLIC half to this server (see POST /api/tunnel/create).
- * The encrypted config template shipped to the client contains a placeholder
- * instead of a private key; the browser substitutes it locally, using the
- * private key it already holds, before the file is saved or QR-coded. This
- * guarantees the peer registered on the real kernel interface always matches
- * the private key the client actually ends up using.
  *
- * INPUT VALIDATION FIX (this revision):
- * clientECDHPublicKey and peerPublicKey were previously only checked as
- * "non-empty string" — a malformed value (wrong length, non-base64 garbage,
- * etc.) would pass that check and then fail deep inside tweetnacl or the
- * WireGuard layer with a confusing, unhandled error instead of a clean 400.
- * Both fields are now validated as well-formed base64 that decodes to
- * exactly 32 raw bytes — the actual size of an X25519 key — before any
- * cryptographic or kernel-level operation touches them. This is applied to
- * every endpoint that receives one of these keys, including
- * POST /api/tunnel/:id/client-config, which previously had no format
- * validation whatsoever (just a bare truthiness check).
+ * INPUT VALIDATION FIX (earlier revision):
+ * clientECDHPublicKey and peerPublicKey are validated as well-formed base64
+ * that decodes to exactly 32 raw bytes (X25519 key size) before any
+ * cryptographic or kernel-level operation touches them.
+ *
+ * DUAL-CONDITION RACE FIX (this revision):
+ * Previously, the time-expiry timer and the data-cap monitor were two
+ * independent setIntervals that could both fire in the same tick — each
+ * would call clearInterval() on the other (which only stops FUTURE ticks,
+ * not an already-running callback), so both could still proceed to call
+ * deleteTunnel() and log their own audit line for the same tunnel. This
+ * undermined the "dual-condition, whichever condition hits first" claim,
+ * since the audit trail could show both conditions "winning" for one tunnel.
+ * Fixed with a `t.terminating` flag checked AND set synchronously, before
+ * any `await`, in both callbacks — JS only context-switches at await
+ * points, so this guarantees only one condition can ever actually win.
+ *
+ * DATA-CAP POLLING GAP (documented, not eliminated — inherent to polling):
+ * The data-cap monitor now polls every 250ms (down from 1000ms) instead of
+ * once per second, shrinking the worst-case overshoot window 4x. Some
+ * overshoot is unavoidable with any polling-based approach: in the worst
+ * case, up to (throughput × polling interval) bytes beyond the configured
+ * cap can cross the tunnel before termination fires. This should be stated
+ * explicitly in the evaluation chapter as a known, quantified limitation
+ * rather than presenting the cap as an exact real-time ceiling.
  */
 
 const express = require('express');
@@ -61,6 +70,12 @@ const PORT = process.env.PORT || 3001;
  */
 const tunnels = new Map();
 
+/** How often the data-cap monitor polls kernel transfer stats, in ms. */
+const DATA_MONITOR_INTERVAL_MS = 250;
+
+/** How often the time-expiry monitor checks, in ms. */
+const EXPIRY_MONITOR_INTERVAL_MS = 1000;
+
 /**
  * Placeholder token embedded in the client config TEMPLATE where the
  * client's own WireGuard PrivateKey must be spliced in, client-side only.
@@ -76,12 +91,6 @@ const b64ToU8 = (b64) => Uint8Array.from(Buffer.from(b64, 'base64'));
 
 /**
  * Validates that a string is a well-formed X25519 key encoded as base64.
- * X25519 public/private keys are always exactly 32 raw bytes, which base64
- * encodes to 44 characters (43 chars + 1 padding '=' with standard base64).
- * This checks BOTH the character set (rejects garbage/URL-encoded/etc. input)
- * AND the decoded byte length (rejects truncated or oversized values), so a
- * malformed key is rejected here with a clean 400 instead of surfacing a
- * confusing error deep inside tweetnacl or the WireGuard kernel layer later.
  */
 function isValidX25519KeyB64(value) {
   if (typeof value !== 'string') return false;
@@ -147,19 +156,29 @@ async function cleanupOTNTInterfaces() {
   });
 }
 
+/**
+ * Ends a tunnel exactly once, no matter which condition (time or data cap)
+ * triggered it. Both timer callbacks funnel through here. The `t.terminating`
+ * flag is set synchronously by the CALLER, before this is invoked, so this
+ * function can safely assume it's the only one tearing this tunnel down.
+ */
+async function terminateTunnel(tunnelId, t, reason) {
+  if (t.timers.expiry) clearInterval(t.timers.expiry);
+  if (t.timers.datamon) clearInterval(t.timers.datamon);
+  try {
+    await wireguard.deleteTunnel(t.ifaceName);
+  } catch {
+    /* already gone — fine, this is teardown, not creation */
+  }
+  tunnels.delete(tunnelId);
+  audit.log(`Tunnel ${tunnelId} ${reason}`);
+}
+
 // --- Health check ---
 app.get('/', (_req, res) => res.send('OTNT Backend up ✅'));
 
 /**
  * POST /api/handshake/init
- * Establishes the ECDH shared secret used later to encrypt the config
- * delivered to the client. Also provisions the SERVER's WireGuard keypair
- * and reserves IPs for both ends of the tunnel.
- *
- * This endpoint no longer generates a WireGuard keypair on the client's
- * behalf. The client generates and keeps its own WireGuard keypair entirely
- * client-side and only ever shares its PUBLIC key, in the follow-up call to
- * POST /api/tunnel/create.
  */
 app.post('/api/handshake/init',
   body('clientECDHPublicKey')
@@ -177,7 +196,6 @@ app.post('/api/handshake/init',
     try {
       const { clientECDHPublicKey } = req.body;
 
-      // Prevent duplicate concurrent handshakes for the same client key.
       for (const t of tunnels.values()) {
         if (t.clientECDHPublicKey === clientECDHPublicKey) {
           return res.status(400).json({ error: 'Handshake already in progress' });
@@ -185,12 +203,8 @@ app.post('/api/handshake/init',
       }
 
       const clientPubU8 = b64ToU8(clientECDHPublicKey);
-
-      // Server's ECDH keypair for this session + shared secret derivation.
       const serverKeyPair = nacl.box.keyPair();
       const sharedSecret = nacl.scalarMult(serverKeyPair.secretKey, clientPubU8);
-
-      // Server's own WireGuard keypair — this server IS one end of the tunnel.
       const { privateKey: wgPriv, publicKey: wgPub } = generateWireGuardKeys();
 
       const tunnelId = uuidv4();
@@ -208,15 +222,18 @@ app.post('/api/handshake/init',
         serverECDHPublicKey: u8ToB64(serverKeyPair.publicKey),
         clientECDHPublicKey,
         ecdhShared: u8ToB64(sharedSecret),
-        // Filled in by POST /api/tunnel/create once the client shares its
-        // WireGuard PUBLIC key. The server never stores a client PRIVATE key.
         peerPublicKey: null,
         timers: {},
         expiry: null,
         dataCap: null,
         dataUsed: 0,
-        clientConfig: null,   // plaintext template — private-key placeholder only
-        clientIfaceName: null
+        clientConfig: null,
+        clientIfaceName: null,
+        // Mutual-exclusion guard: true once EITHER the expiry timer or the
+        // data-cap monitor has committed to tearing this tunnel down.
+        // Checked AND set synchronously (before any await) in both
+        // callbacks below, so only one condition can ever actually win.
+        terminating: false
       });
 
       audit.log(`Handshake init for ${tunnelId}`);
@@ -236,12 +253,6 @@ app.post('/api/handshake/init',
 
 /**
  * POST /api/tunnel/create
- * Registers the client's WireGuard PUBLIC key as a peer on a real kernel
- * WireGuard interface, and starts the dual-condition expiry monitors.
- *
- * `peerPublicKey` here is the same public key the client keeps the matching
- * private key for, locally, in its own browser — this is what fixes the
- * previous mismatch between the registered peer and the downloadable config.
  */
 app.post('/api/tunnel/create', [
   body('tunnelId').isString().notEmpty(),
@@ -274,18 +285,12 @@ app.post('/api/tunnel/create', [
       });
     }
 
-    // 1. Clear any leftover OTNT interfaces before provisioning a new one.
     await cleanupOTNTInterfaces();
-
-    // 2. Reserve an interface name (collision-checked against `wg show interfaces`).
     const ifaceName = await getNextFreeWGInterface();
 
-    // 3. Resolve the endpoint the client will connect to.
     const hostIP = endpoint || getHostIP();
     const finalEndpoint = `${hostIP}:51820`;
 
-    // 4. Create the real kernel WireGuard interface, registering the
-    //    CLIENT-SUPPLIED public key as the trusted peer.
     const result = await wireguard.createTunnel({
       privateKey: t.wgPriv,
       address: t.serverIP,
@@ -297,13 +302,8 @@ app.post('/api/tunnel/create', [
 
     t.ifaceName = result.ifaceName;
     t.peerPublicKey = peerPublicKey;
-    t.clientIfaceName = `wg${tunnelId.slice(0, 8)}`; // cosmetic label, used only for the downloaded filename
+    t.clientIfaceName = `wg${tunnelId.slice(0, 8)}`;
 
-    // 5. Build the client config TEMPLATE. The PrivateKey line uses a
-    //    placeholder — the browser fills this in with the private key it
-    //    already generated and never shared, immediately before saving the
-    //    file. This is what makes the delivered file match the peer that
-    //    was actually registered on the interface above.
     t.clientConfig = `[Interface]
 PrivateKey = ${CLIENT_PRIVATE_KEY_PLACEHOLDER}
 Address = ${t.clientIP}
@@ -318,35 +318,45 @@ PersistentKeepalive = 25`;
     // 6. Expiry timer (time-based condition).
     if (expirySeconds) {
       t.expiry = Date.now() + expirySeconds * 1000;
-      t.timers.expiry = setInterval(async () => {
+      t.timers.expiry = setInterval(() => {
+        // Guard checked AND set synchronously, before any await, so a
+        // same-tick race with the data-cap monitor can only ever let ONE
+        // of the two branches proceed past this point.
+        if (t.terminating) return;
         if (Date.now() >= t.expiry) {
-          clearInterval(t.timers.expiry);
-          if (t.timers.datamon) clearInterval(t.timers.datamon);
-          try { await wireguard.deleteTunnel(t.ifaceName); } catch { /* already gone */ }
-          tunnels.delete(tunnelId);
-          audit.log(`Tunnel ${tunnelId} expired`);
+          t.terminating = true;
+          terminateTunnel(tunnelId, t, 'expired');
         }
-      }, 1000);
+      }, EXPIRY_MONITOR_INTERVAL_MS);
     }
 
     // 7. Data-cap monitor (data-volume condition).
     if (dataCapBytes) {
       t.dataCap = dataCapBytes;
       t.timers.datamon = setInterval(async () => {
+        if (t.terminating) return;
         try {
           const used = await wireguard.getTransferBytes(t.ifaceName);
+          // Only overwrite dataUsed on a SUCCESSFUL read — a failed read
+          // (e.g. interface mid-teardown) must not stomp the last known
+          // good value with a misleading zero.
           t.dataUsed = used;
+
+          // Re-check the guard AFTER the await — the expiry timer could
+          // have won while this read was in flight.
+          if (t.terminating) return;
+
           if (used >= t.dataCap) {
-            clearInterval(t.timers.datamon);
-            if (t.timers.expiry) clearInterval(t.timers.expiry);
-            try { await wireguard.deleteTunnel(t.ifaceName); } catch { /* already gone */ }
-            tunnels.delete(tunnelId);
-            audit.log(`Tunnel ${tunnelId} hit data cap and was deleted`);
+            t.terminating = true;
+            await terminateTunnel(tunnelId, t, 'hit data cap and was deleted');
           }
         } catch (e) {
-          console.warn('Data monitor error:', e.message);
+          // getTransferBytes now throws instead of silently returning 0
+          // (see wireguard.js) — swallow here, keep last known t.dataUsed,
+          // and just try again on the next tick.
+          console.warn(`Data monitor read error for ${tunnelId}:`, e.message);
         }
-      }, 1000);
+      }, DATA_MONITOR_INTERVAL_MS);
     }
 
     audit.log(`Tunnel created: ${tunnelId}`);
@@ -364,9 +374,6 @@ PersistentKeepalive = 25`;
 
 /**
  * POST /api/tunnel/:id/client-config
- * Encrypts the stored config TEMPLATE (private-key placeholder, not a real
- * key) under AES-256-GCM, keyed by SHA-256(ECDH shared secret). The browser
- * decrypts this, then locally substitutes its own private key before saving.
  */
 app.post('/api/tunnel/:id/client-config', async (req, res) => {
   const t = tunnels.get(req.params.id);
@@ -410,8 +417,15 @@ app.get('/api/tunnel/status/:id', async (req, res) => {
   if (!t) return res.status(404).json({ error: 'Not found' });
 
   try {
-    const used = await wireguard.getTransferBytes(t.ifaceName);
-    t.dataUsed = used;
+    try {
+      const used = await wireguard.getTransferBytes(t.ifaceName);
+      t.dataUsed = used; // only overwrite on a successful read
+    } catch (e) {
+      // Keep last known t.dataUsed instead of resetting to 0 on a
+      // transient read failure (e.g. interface mid-teardown).
+      console.warn(`Status read error for ${t.id}:`, e.message);
+    }
+
     const timeLeft = t.expiry ? Math.max(0, Math.floor((t.expiry - Date.now()) / 1000)) : null;
 
     res.json({
@@ -437,6 +451,13 @@ app.post('/api/tunnel/delete', body('tunnelId').isString().notEmpty(), async (re
   if (!t) return res.status(404).json({ error: 'Not found' });
 
   try {
+    // A manual delete is itself a form of termination — set the same guard
+    // so a timer that's mid-flight can't also try to tear this down.
+    if (t.terminating) {
+      return res.status(409).json({ error: 'Tunnel is already being terminated' });
+    }
+    t.terminating = true;
+
     if (t.timers.expiry) clearInterval(t.timers.expiry);
     if (t.timers.datamon) clearInterval(t.timers.datamon);
 

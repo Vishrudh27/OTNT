@@ -256,7 +256,7 @@ async function deleteTunnel(ifaceName) {
   }
 }
 
-// --- Remove a peer from an interface (new) ---
+// --- Remove a peer from an interface ---
 async function removePeer(ifaceName, peerPublicKey) {
   if (isWindows) {
     console.warn("[WG] removePeer not supported on Windows");
@@ -277,20 +277,26 @@ async function removePeer(ifaceName, peerPublicKey) {
 }
 
 // --- Get transfer bytes ---
+// FIX (dual-condition edge-case pass): previously this function CAUGHT any
+// error from `sudo wg show <iface> transfer` and silently returned 0. That
+// meant a transient read failure (e.g. interface mid-teardown, a permissions
+// hiccup) could momentarily stomp a tunnel's real, already-accumulated
+// dataUsed with a misleading 0 — potentially resetting how close a tunnel
+// looked to its data cap. This function now THROWS instead, and index.js
+// (both the /api/tunnel/status/:id route and the data-cap monitor) catches
+// it and explicitly keeps the last known good value rather than overwriting
+// it with 0. This is a coordinated change — do not revert this file back to
+// swallow-and-return-0 without also reverting the corresponding index.js logic.
 async function getTransferBytes(ifaceName) {
   if (isWindows) return 0;
-  try {
-    const { stdout } = await exec(`sudo wg show ${ifaceName} transfer`);
-    let total = 0;
-    stdout.trim().split('\n').forEach(line => {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 3) total += (parseInt(parts[1], 10) || 0) + (parseInt(parts[2], 10) || 0);
-    });
-    return total;
-  } catch (e) {
-    console.warn(`[WG WARN] getTransferBytes failed for ${ifaceName}: ${e.message}`);
-    return 0;
-  }
+
+  const { stdout } = await exec(`sudo wg show ${ifaceName} transfer`);
+  let total = 0;
+  stdout.trim().split('\n').forEach(line => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 3) total += (parseInt(parts[1], 10) || 0) + (parseInt(parts[2], 10) || 0);
+  });
+  return total;
 }
 
 module.exports = {
