@@ -8,7 +8,7 @@
  *   4. Dual-condition expiry monitoring (time OR data volume)
  *   5. Manual/automatic tunnel teardown + crash-recovery cleanup
  *
- * SECURITY FIX (this revision):
+ * SECURITY FIX (previous revision):
  * The backend NEVER generates or stores a WireGuard PRIVATE key on behalf of
  * the client. The client generates its own WireGuard keypair in the browser
  * and only ever sends the PUBLIC half to this server (see POST /api/tunnel/create).
@@ -17,6 +17,18 @@
  * private key it already holds, before the file is saved or QR-coded. This
  * guarantees the peer registered on the real kernel interface always matches
  * the private key the client actually ends up using.
+ *
+ * INPUT VALIDATION FIX (this revision):
+ * clientECDHPublicKey and peerPublicKey were previously only checked as
+ * "non-empty string" — a malformed value (wrong length, non-base64 garbage,
+ * etc.) would pass that check and then fail deep inside tweetnacl or the
+ * WireGuard layer with a confusing, unhandled error instead of a clean 400.
+ * Both fields are now validated as well-formed base64 that decodes to
+ * exactly 32 raw bytes — the actual size of an X25519 key — before any
+ * cryptographic or kernel-level operation touches them. This is applied to
+ * every endpoint that receives one of these keys, including
+ * POST /api/tunnel/:id/client-config, which previously had no format
+ * validation whatsoever (just a bare truthiness check).
  */
 
 const express = require('express');
@@ -61,6 +73,26 @@ const CLIENT_PRIVATE_KEY_PLACEHOLDER = '__OTNT_CLIENT_PRIVATE_KEY__';
 // --- Base64 <-> Uint8Array helpers ---
 const u8ToB64 = (u8) => Buffer.from(u8).toString('base64');
 const b64ToU8 = (b64) => Uint8Array.from(Buffer.from(b64, 'base64'));
+
+/**
+ * Validates that a string is a well-formed X25519 key encoded as base64.
+ * X25519 public/private keys are always exactly 32 raw bytes, which base64
+ * encodes to 44 characters (43 chars + 1 padding '=' with standard base64).
+ * This checks BOTH the character set (rejects garbage/URL-encoded/etc. input)
+ * AND the decoded byte length (rejects truncated or oversized values), so a
+ * malformed key is rejected here with a clean 400 instead of surfacing a
+ * confusing error deep inside tweetnacl or the WireGuard kernel layer later.
+ */
+function isValidX25519KeyB64(value) {
+  if (typeof value !== 'string') return false;
+  if (!/^[A-Za-z0-9+/]{42,44}={0,2}$/.test(value)) return false;
+  try {
+    const decoded = Buffer.from(value, 'base64');
+    return decoded.length === 32;
+  } catch {
+    return false;
+  }
+}
 
 /** Generates a fresh X25519 (WireGuard-compatible) keypair. */
 function generateWireGuardKeys() {
@@ -130,7 +162,14 @@ app.get('/', (_req, res) => res.send('OTNT Backend up ✅'));
  * POST /api/tunnel/create.
  */
 app.post('/api/handshake/init',
-  body('clientECDHPublicKey').isString().notEmpty(),
+  body('clientECDHPublicKey')
+    .isString().notEmpty()
+    .custom((value) => {
+      if (!isValidX25519KeyB64(value)) {
+        throw new Error('clientECDHPublicKey must be a valid base64-encoded 32-byte X25519 public key');
+      }
+      return true;
+    }),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -206,7 +245,14 @@ app.post('/api/handshake/init',
  */
 app.post('/api/tunnel/create', [
   body('tunnelId').isString().notEmpty(),
-  body('peerPublicKey').isString().notEmpty(),
+  body('peerPublicKey')
+    .isString().notEmpty()
+    .custom((value) => {
+      if (!isValidX25519KeyB64(value)) {
+        throw new Error('peerPublicKey must be a valid base64-encoded 32-byte X25519 public key');
+      }
+      return true;
+    }),
   body('allowedIPs').isString().notEmpty(),
   body('endpoint').optional().isString(),
   body('expirySeconds').optional().isInt({ min: 5, max: 86400 }),
@@ -330,6 +376,9 @@ app.post('/api/tunnel/:id/client-config', async (req, res) => {
   try {
     const clientPubB64 = req.body.clientECDHPublicKey;
     if (!clientPubB64) return res.status(400).json({ error: 'Missing clientECDHPublicKey' });
+    if (!isValidX25519KeyB64(clientPubB64)) {
+      return res.status(400).json({ error: 'clientECDHPublicKey must be a valid base64-encoded 32-byte X25519 public key' });
+    }
 
     const clientPub = b64ToU8(clientPubB64);
     const serverPriv = b64ToU8(t.serverECDHPrivateKey);
