@@ -2,9 +2,9 @@
 import React, { useState } from "react";
 import axios from "axios";
 import nacl from "tweetnacl";
-import { Button, Box, Typography, Alert, CircularProgress, Paper, Fade, Chip } from "@mui/material";
+import { Button, Box, Typography, Alert, CircularProgress, Paper, Fade, Chip, Grid } from "@mui/material";
 import { QRCodeCanvas } from "qrcode.react";
-import { Download, Smartphone, ShieldCheck, Lock } from "lucide-react";
+import { Download, Lock, Shield, Wifi } from "lucide-react";
 
 import { deriveAESKeyFromShared, decryptAESGCM, downloadAsFile } from "../utils/cryptoClient";
 import { tokens } from "../theme";
@@ -25,7 +25,7 @@ function decodeBase64(b64) {
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001/api";
 
-export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, onConfigReady }) {
+export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, onConfigReady, md = 4 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [configText, setConfigText] = useState(null);
@@ -52,7 +52,7 @@ export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, on
 
       const plaintext = template.replace(CLIENT_PRIVATE_KEY_PLACEHOLDER, clientPrivateKey);
       setConfigText(plaintext);
-      onConfigReady?.();
+      onConfigReady?.(plaintext);
 
       const fileName = resp.data.ifaceName ? `${resp.data.ifaceName}.conf` : `wg${tunnelId}.conf`;
       downloadAsFile(plaintext, fileName);
@@ -65,40 +65,140 @@ export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, on
   }
 
   return (
-    <Paper
-      elevation={0}
-      sx={{ p: 3, borderRadius: "20px", height: "100%", textAlign: "center", animation: "fadeInUp 350ms ease both",
-        "@keyframes fadeInUp": { from: { opacity: 0, transform: "translateY(12px)" }, to: { opacity: 1, transform: "translateY(0)" } } }}
-    >
-      <Typography variant="h6" sx={{ mb: 2 }}>Configuration</Typography>
-      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: "12px", textAlign: "left" }}>{error}</Alert>}
+    <>
+      {/* Card 1: Configuration Downloader */}
+      <Grid item xs={12} md={md}>
+        <Paper
+          elevation={0}
+          className="animate-fade-in-up"
+          sx={{
+            p: 4,
+            borderRadius: "24px",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            bgcolor: "rgba(255, 255, 255, 0.45)",
+            backdropFilter: "blur(16px)",
+            border: `1px solid ${tokens.border}`,
+          }}
+        >
+          <Box>
+            <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, mb: 1, color: tokens.text }}>
+              Configuration Package
+            </Typography>
+            <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 3, fontSize: "0.82rem" }}>
+              Request and decrypt the ephemeral WireGuard configuration profile.
+            </Typography>
 
-      <Button
-        variant="contained"
-        color="primary"
-        onClick={handleClick}
-        disabled={busy}
-        startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <Download size={16} />}
-        sx={{ px: 4, py: 1.1 }}
-      >
-        {busy ? "Preparing…" : "Download Config"}
-      </Button>
+            {error && (
+              <Alert 
+                severity="error" 
+                sx={{ 
+                  mb: 3, 
+                  borderRadius: "14px", 
+                  bgcolor: "rgba(239, 68, 68, 0.1)", 
+                  border: `1px solid rgba(239, 68, 68, 0.2)`, 
+                  color: tokens.danger,
+                  fontSize: "0.78rem" 
+                }}
+              >
+                {error}
+              </Alert>
+            )}
 
-      <Fade in={!!configText} unmountOnExit>
-        <Box sx={{ mt: 3, pt: 2.5, borderTop: `1px solid ${tokens.border}` }}>
-          <Box sx={{ display: "inline-block", p: 1.6, border: `1px solid ${tokens.border}`, borderRadius: "16px" }}>
-            {configText && <QRCodeCanvas value={configText} size={170} level="H" includeMargin />}
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, mb: 2 }}>
+              <Box sx={{ display: "flex", gap: 1 }}>
+                <Chip size="small" icon={<Lock size={12} />} label="Encrypted Channel" sx={{ fontSize: "0.68rem", bgcolor: "rgba(139, 92, 246, 0.1)", color: tokens.purple, borderColor: "rgba(139, 92, 246, 0.15)" }} />
+                <Chip size="small" icon={<Shield size={12} />} label="AES-256-GCM" sx={{ fontSize: "0.68rem", bgcolor: "rgba(16, 185, 129, 0.1)", color: tokens.success, borderColor: "rgba(16, 185, 129, 0.15)" }} />
+              </Box>
+              <Typography variant="body2" sx={{ fontSize: "0.75rem", color: tokens.textSecondary }}>
+                The server generates a config template with a client-private-key placeholder. Your client decodes it using WebCrypto APIs.
+              </Typography>
+            </Box>
           </Box>
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.6, mt: 1.5 }}>
-            <Smartphone size={14} color={tokens.textSecondary} />
-            <Typography variant="body2">Scan with WireGuard</Typography>
-          </Box>
-          <Box sx={{ display: "flex", justifyContent: "center", gap: 1, mt: 1.5 }}>
-            <Chip size="small" icon={<Lock size={12} />} label="Encrypted Delivery" sx={{ fontSize: "0.68rem", bgcolor: tokens.background }} />
-            <Chip size="small" icon={<ShieldCheck size={12} />} label="AES-256" sx={{ fontSize: "0.68rem", bgcolor: tokens.background }} />
-          </Box>
-        </Box>
-      </Fade>
-    </Paper>
+
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleClick}
+            disabled={busy}
+            startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <Download size={16} />}
+            sx={{ py: 1.5, fontWeight: 700 }}
+          >
+            {busy ? "Decrypting Package..." : "Decrypt & Download"}
+          </Button>
+        </Paper>
+      </Grid>
+
+      {/* Card 2: QR Setup Panel */}
+      <Grid item xs={12} md={md}>
+        <Paper
+          elevation={0}
+          className="animate-fade-in-up"
+          sx={{
+            p: 4,
+            borderRadius: "24px",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            bgcolor: "rgba(255, 255, 255, 0.45)",
+            backdropFilter: "blur(16px)",
+            border: `1px solid ${tokens.border}`,
+            textAlign: "center",
+          }}
+        >
+          {configText ? (
+            <Fade in={true}>
+              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <Box sx={{
+                  p: 2,
+                  bgcolor: "#FFFFFF",
+                  borderRadius: "20px",
+                  display: "inline-block",
+                  boxShadow: "0 8px 30px rgba(0, 0, 0, 0.15)",
+                  border: `1px solid ${tokens.border}`
+                }}>
+                  <QRCodeCanvas value={configText} size={150} level="H" includeMargin />
+                </Box>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2.5 }}>
+                  <Wifi size={14} color={tokens.success} />
+                  <Typography variant="body2" sx={{ fontWeight: 600, fontSize: "0.8rem", color: tokens.text }}>
+                    Scan QR Setup
+                  </Typography>
+                </Box>
+                <Typography variant="body2" sx={{ color: tokens.textSecondary, fontSize: "0.72rem", mt: 0.5 }}>
+                  Aim your mobile WireGuard camera here to import.
+                </Typography>
+              </Box>
+            </Fade>
+          ) : (
+            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 2 }}>
+              <Box sx={{
+                width: 70,
+                height: 70,
+                borderRadius: "50%",
+                border: `1.5px dashed ${tokens.border}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                mb: 2.5,
+                bgcolor: "rgba(0, 0, 0, 0.02)"
+              }}>
+                <Lock size={26} color={tokens.textSecondary} className="pulse-indicator" />
+              </Box>
+              <Typography variant="body2" sx={{ fontWeight: 700, color: tokens.text, fontSize: "0.85rem" }}>
+                Setup QR Locked
+              </Typography>
+              <Typography variant="body2" sx={{ color: tokens.textSecondary, fontSize: "0.75rem", mt: 0.8, px: 2 }}>
+                Decrypt and download configuration package first to unlock target QR sync.
+              </Typography>
+            </Box>
+          )}
+        </Paper>
+      </Grid>
+    </>
   );
 }

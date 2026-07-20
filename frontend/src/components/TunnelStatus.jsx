@@ -1,7 +1,7 @@
 // frontend/src/components/TunnelStatus.jsx
 import React, { useEffect, useState } from "react";
-import { Box, Paper, Typography, Button, CircularProgress, Alert, LinearProgress, Chip } from "@mui/material";
-import { Clock, Network, Globe, Database, Trash2 } from "lucide-react";
+import { Box, Paper, Typography, Button, CircularProgress, Alert, LinearProgress, Chip, Grid } from "@mui/material";
+import { Timer, Wifi, Database, Activity, Shield, Network } from "lucide-react";
 import { getTunnelStatus, deleteTunnel } from "../api/axios";
 import { tokens } from "../theme";
 
@@ -12,14 +12,16 @@ function formatTime(seconds) {
   return `${m}:${s}`;
 }
 
-function StatCard({ icon, label, value }) {
+function StatField({ icon: Icon, label, value, color }) {
   return (
-    <Box sx={{ p: 1.8, borderRadius: "14px", border: `1px solid ${tokens.border}`, bgcolor: tokens.background }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.6, mb: 0.6 }}>
-        {icon}
-        <Typography variant="subtitle2">{label}</Typography>
+    <Box sx={{ display: "flex", alignItems: "center", justifyBetween: "space-between", py: 1.5, borderBottom: `1px solid ${tokens.border}` }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Icon size={14} color={tokens.textSecondary} />
+        <Typography variant="body2" sx={{ color: tokens.textSecondary, fontSize: "0.8rem" }}>{label}</Typography>
       </Box>
-      <Typography sx={{ fontWeight: 700, fontFamily: "monospace", fontSize: "0.95rem" }}>{value}</Typography>
+      <Typography sx={{ fontFamily: "monospace", fontSize: "0.85rem", fontWeight: 700, color: color || tokens.text, ml: "auto" }}>
+        {value}
+      </Typography>
     </Box>
   );
 }
@@ -68,9 +70,8 @@ export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
     }
   }
 
-  if (!status && !err) {
-    return <Box sx={{ display: "flex", justifyContent: "center", py: 6 }}><CircularProgress size={26} /></Box>;
-  }
+  // Preserve loading structure but within Grid cards to prevent layout shifts
+  const isLoading = !status && !err;
 
   const capMB = status?.dataCapBytes ? status.dataCapBytes / (1024 * 1024) : null;
   const usedMB = (status?.bytesTransferred || 0) / (1024 * 1024);
@@ -78,48 +79,154 @@ export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
   const endpoint = status?.serverIP ? `${status.serverIP}:51820` : "—";
 
   return (
-    <Paper
-      elevation={0}
-      sx={{ p: 3, borderRadius: "20px", height: "100%", animation: "fadeInUp 350ms ease both",
-        "@keyframes fadeInUp": { from: { opacity: 0, transform: "translateY(12px)" }, to: { opacity: 1, transform: "translateY(0)" } } }}
-    >
-      {err && <Alert severity="warning" sx={{ mb: 2, borderRadius: "12px" }}>{err}</Alert>}
+    <>
+      {/* CARD 1: Tunnel Status */}
+      <Grid item xs={12} md={4}>
+        <Paper
+          elevation={0}
+          className="animate-slide-right"
+          sx={{
+            p: 4,
+            borderRadius: "24px",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            bgcolor: "rgba(255, 255, 255, 0.45)",
+            backdropFilter: "blur(16px)",
+            border: `1px solid ${tokens.border}`,
+          }}
+        >
+          <Box>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+              <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, color: tokens.text }}>
+                Tunnel Connection
+              </Typography>
+              <Chip
+                size="small"
+                label={status ? "Active" : "Pending"}
+                sx={{
+                  bgcolor: status ? "rgba(16, 185, 129, 0.1)" : "rgba(217, 119, 6, 0.1)",
+                  color: status ? tokens.success : tokens.primary,
+                  borderColor: status ? "rgba(16, 185, 129, 0.2)" : "rgba(217, 119, 6, 0.2)",
+                  fontWeight: 700,
+                  fontSize: "0.68rem"
+                }}
+              />
+            </Box>
 
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
-        <Typography variant="h6">Tunnel Status</Typography>
-        <Chip size="small" label="Active" sx={{ bgcolor: "rgba(16,185,129,0.10)", color: tokens.success, fontWeight: 700 }} />
-      </Box>
+            {err && <Alert severity="warning" sx={{ mb: 2, borderRadius: "12px", py: 0.5, fontSize: "0.75rem" }}>{err}</Alert>}
 
-      <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5, mb: 2.5 }}>
-        <StatCard icon={<Clock size={13} color={tokens.textSecondary} />} label="Remaining" value={formatTime(status?.timeLeftSeconds)} />
-        <StatCard icon={<Network size={13} color={tokens.textSecondary} />} label="Interface" value={status?.iface || "—"} />
-        <StatCard icon={<Globe size={13} color={tokens.textSecondary} />} label="Endpoint" value={endpoint} />
-        <StatCard icon={<Database size={13} color={tokens.textSecondary} />} label="Data Used" value={`${usedMB.toFixed(2)} MB`} />
-      </Box>
+            {isLoading ? (
+              <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", py: 4 }}>
+                <CircularProgress size={20} color="primary" />
+              </Box>
+            ) : (
+              <Box sx={{ display: "flex", flexDirection: "column" }}>
+                <StatField icon={Network} label="Virtual Interface" value={status?.iface || "—"} color={tokens.primary} />
+                <StatField icon={Wifi} label="Tunnel Endpoint" value={endpoint} />
+                <StatField icon={Shield} label="Local IP Address" value={status?.clientIP || "—"} />
+              </Box>
+            )}
+          </Box>
 
-      <Box sx={{ mb: 1 }}>
-        <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.8 }}>
-          <Typography variant="subtitle2">Usage</Typography>
-          <Typography variant="body2">{capMB ? `${capMB.toFixed(0)} MB cap` : "No cap"}</Typography>
-        </Box>
-        <LinearProgress
-          variant="determinate"
-          value={capMB ? usagePct : 0}
-          sx={{ "& .MuiLinearProgress-bar": { bgcolor: usagePct > 85 ? tokens.danger : tokens.primary, borderRadius: 8 } }}
-        />
-      </Box>
+          <Button
+            onClick={handleDelete}
+            variant="outlined"
+            color="error"
+            fullWidth
+            disabled={deleting || isLoading}
+            startIcon={deleting ? <CircularProgress size={14} color="inherit" /> : <Shield size={14} />}
+            sx={{ mt: 3, py: 1.1, fontSize: "0.8rem", fontWeight: 700 }}
+          >
+            {deleting ? "Tearing Down..." : "Destroy Tunnel"}
+          </Button>
+        </Paper>
+      </Grid>
 
-      <Button
-        onClick={handleDelete}
-        variant="outlined"
-        color="error"
-        fullWidth
-        disabled={deleting}
-        startIcon={<Trash2 size={15} />}
-        sx={{ mt: 2 }}
-      >
-        {deleting ? "Deleting…" : "Delete Tunnel"}
-      </Button>
-    </Paper>
+      {/* CARD 2: Tunnel Statistics */}
+      <Grid item xs={12} md={4}>
+        <Paper
+          elevation={0}
+          className="animate-slide-right"
+          sx={{
+            p: 4,
+            borderRadius: "24px",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            bgcolor: "rgba(255, 255, 255, 0.45)",
+            backdropFilter: "blur(16px)",
+            border: `1px solid ${tokens.border}`,
+          }}
+        >
+          <Box>
+            <Box sx={{ display: "flex", alignItems: "center", justifyBetween: "space-between", mb: 2 }}>
+              <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, color: tokens.text }}>
+                Tunnel Statistics
+              </Typography>
+              <Activity size={16} color={tokens.secondary} className="pulse-indicator" />
+            </Box>
+
+            {isLoading ? (
+              <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", py: 4 }}>
+                <CircularProgress size={20} color="primary" />
+              </Box>
+            ) : (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                {/* Expiry Clock */}
+                <Box sx={{ p: 2, borderRadius: "14px", border: `1px solid ${tokens.border}`, bgcolor: "rgba(0, 0, 0, 0.02)", display: "flex", alignItems: "center", gap: 1.5 }}>
+                  <Timer size={18} color={tokens.secondary} />
+                  <Box>
+                    <Typography variant="body2" sx={{ color: tokens.textSecondary, fontSize: "0.68rem", fontWeight: 600 }}>
+                      TIME REMAINING
+                    </Typography>
+                    <Typography variant="h5" sx={{ fontFamily: "monospace", fontWeight: 800, color: tokens.secondary }}>
+                      {formatTime(status?.timeLeftSeconds)}
+                    </Typography>
+                  </Box>
+                </Box>
+
+                {/* Data Cap stats */}
+                <Box>
+                  <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.8, alignItems: "baseline" }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
+                      <Database size={13} color={tokens.textSecondary} />
+                      <Typography variant="body2" sx={{ color: tokens.textSecondary, fontSize: "0.72rem", fontWeight: 600 }}>
+                        DATA CONSUMED
+                      </Typography>
+                    </Box>
+                    <Typography sx={{ fontFamily: "monospace", fontSize: "0.82rem", fontWeight: 700 }}>
+                      {usedMB.toFixed(2)} MB / {capMB ? `${capMB.toFixed(0)} MB` : "∞"}
+                    </Typography>
+                  </Box>
+
+                  <LinearProgress
+                    variant="determinate"
+                    value={capMB ? usagePct : 0}
+                    sx={{
+                      height: 6,
+                      borderRadius: 4,
+                      "& .MuiLinearProgress-bar": {
+                        bgcolor: usagePct > 80 ? tokens.danger : tokens.success,
+                        borderRadius: 4
+                      }
+                    }}
+                  />
+                </Box>
+              </Box>
+            )}
+          </Box>
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2, pt: 1.5, borderTop: `1px solid ${tokens.border}` }}>
+            <Activity size={14} color={tokens.success} />
+            <Typography variant="body2" sx={{ fontSize: "0.72rem", color: tokens.textSecondary }}>
+              Data sync interval: 250ms
+            </Typography>
+          </Box>
+        </Paper>
+      </Grid>
+    </>
   );
 }
