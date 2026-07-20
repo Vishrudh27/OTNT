@@ -1,7 +1,7 @@
 // frontend/src/components/SecureSessionCard.jsx
 import React, { useState } from "react";
-import { Box, Paper, Typography, Slide, IconButton, Tooltip } from "@mui/material";
-import { ShieldCheck, KeyRound, Copy, Check, Lock } from "lucide-react";
+import { Box, Paper, Typography, Fade, IconButton, Tooltip, Chip } from "@mui/material";
+import { KeyRound, Copy, Check, ShieldCheck } from "lucide-react";
 import { tokens } from "../theme";
 
 function truncateKey(key) {
@@ -17,20 +17,16 @@ function CopyableRow({ label, value }) {
       await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable — silently ignore, not critical */
-    }
+    } catch {}
   }
   return (
-    <Box sx={{ mb: 2 }}>
+    <Box sx={{ py: 1.5, borderBottom: `1px solid ${tokens.border}` }}>
       <Typography variant="subtitle2">{label}</Typography>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 0.5 }}>
-        <Typography sx={{ fontFamily: "monospace", fontSize: "0.82rem", color: tokens.text }}>
-          {truncateKey(value)}
-        </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 0.4 }}>
+        <Typography sx={{ fontFamily: "monospace", fontSize: "0.82rem" }}>{truncateKey(value)}</Typography>
         <Tooltip title={copied ? "Copied" : "Copy"}>
           <IconButton size="small" onClick={handleCopy}>
-            {copied ? <Check size={15} color={tokens.success} /> : <Copy size={15} color={tokens.textSecondary} />}
+            {copied ? <Check size={14} color={tokens.success} /> : <Copy size={14} color={tokens.textSecondary} />}
           </IconButton>
         </Tooltip>
       </Box>
@@ -38,47 +34,32 @@ function CopyableRow({ label, value }) {
   );
 }
 
-function StatusRow({ icon, label }) {
-  return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
-      {icon}
-      <Typography variant="body2" sx={{ color: tokens.text, fontWeight: 500 }}>{label}</Typography>
-    </Box>
-  );
-}
-
-/**
- * Floating "Secure Session" panel. Slides in from the left once a tunnel
- * (and therefore a completed handshake) exists, stays visible for the
- * tunnel's lifetime. Displays only PUBLIC keys — never the client's
- * WireGuard private key, which never leaves App's in-memory state.
- */
 export default function SecureSessionCard({ visible, clientPublicKey, serverPublicKey }) {
   return (
-    <Slide direction="right" in={visible} mountOnEnter unmountOnExit>
+    <Fade in={visible} unmountOnExit>
       <Paper
         elevation={0}
-        sx={{
-          p: 3,
-          borderRadius: "18px",
-          width: 280,
-          position: { md: "sticky" },
-          top: { md: 24 },
-        }}
+        sx={{ p: 3, borderRadius: "20px", height: "100%", animation: "fadeInUp 350ms ease both",
+          "@keyframes fadeInUp": { from: { opacity: 0, transform: "translateY(12px)" }, to: { opacity: 1, transform: "translateY(0)" } } }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2.5 }}>
-          <Lock size={18} color={tokens.primary} />
-          <Typography variant="h6" sx={{ fontSize: "1rem" }}>Secure Session</Typography>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+          <Typography variant="h6" sx={{ fontSize: "1rem" }}>🔐 Secure Session</Typography>
         </Box>
+        <Chip
+          size="small"
+          icon={<KeyRound size={12} />}
+          label="Handshake Complete"
+          sx={{ bgcolor: "rgba(16,185,129,0.10)", color: tokens.success, mb: 1, fontSize: "0.72rem" }}
+        />
 
-        <CopyableRow label="Client WireGuard Key" value={clientPublicKey} />
-        <CopyableRow label="Server ECDH Key" value={serverPublicKey} />
+        <CopyableRow label="Client Key" value={clientPublicKey} />
+        <CopyableRow label="Server Key" value={serverPublicKey} />
 
-        <Box sx={{ height: 1, bgcolor: tokens.border, my: 2 }} />
-
-        <StatusRow icon={<KeyRound size={16} color={tokens.success} />} label="Handshake complete" />
-        <StatusRow icon={<ShieldCheck size={16} color={tokens.success} />} label="AES-256 session ready" />
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, pt: 1.5 }}>
+          <ShieldCheck size={16} color={tokens.success} />
+          <Typography variant="body2" sx={{ fontWeight: 600, color: tokens.text }}>AES-256 Ready</Typography>
+        </Box>
       </Paper>
-    </Slide>
+    </Fade>
   );
 }

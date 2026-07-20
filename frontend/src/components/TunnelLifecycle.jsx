@@ -1,83 +1,42 @@
 // frontend/src/components/TunnelLifecycle.jsx
 import React from "react";
 import { Box, Paper, Typography } from "@mui/material";
-import { KeyRound, Network, FileLock2, Wifi, Timer } from "lucide-react";
+import { KeyRound, Network, FileLock2, Wifi, Timer, ArrowRight } from "lucide-react";
 import { tokens } from "../theme";
 
-/**
- * Bottom lifecycle timeline. HONEST NOTE: this is a UI-state indicator, not
- * a live network probe. "Connected" reflects that a config has been
- * delivered to the client, not a verified live WireGuard handshake — that
- * would require the status endpoint to expose peer handshake age from
- * `wg show`, which it currently doesn't. Fine for a demo/orientation aid;
- * don't cite this as evidence of a live connection in the write-up.
- */
 const STAGES = [
   { key: "handshake", label: "Handshake", icon: KeyRound },
-  { key: "created", label: "Tunnel Created", icon: Network },
-  { key: "config", label: "Encrypted Config", icon: FileLock2 },
-  { key: "connected", label: "Connected", icon: Wifi },
-  { key: "destroy", label: "Auto Destroy", icon: Timer },
+  { key: "created", label: "Tunnel", icon: Network },
+  { key: "config", label: "Encryption", icon: FileLock2 },
+  { key: "connected", label: "Config", icon: Wifi },
+  { key: "destroy", label: "Destroy", icon: Timer },
 ];
 
 export default function TunnelLifecycle({ handshakeDone, tunnelCreated, configReady, connected }) {
-  const doneMap = {
-    handshake: handshakeDone,
-    created: tunnelCreated,
-    config: configReady,
-    connected: connected,
-    destroy: false,
-  };
+  const doneMap = { handshake: handshakeDone, created: tunnelCreated, config: configReady, connected, destroy: false };
 
   return (
-    <Paper elevation={0} sx={{ p: 3, borderRadius: "18px", mt: 4 }}>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 2 }}>
+    <Paper
+      elevation={0}
+      sx={{ p: 3, borderRadius: "20px", height: "100%", animation: "fadeInUp 350ms ease both",
+        "@keyframes fadeInUp": { from: { opacity: 0, transform: "translateY(12px)" }, to: { opacity: 1, transform: "translateY(0)" } } }}
+    >
+      <Typography variant="h6" sx={{ mb: 2.5 }}>Tunnel Lifecycle</Typography>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}>
         {STAGES.map((stage, i) => {
           const Icon = stage.icon;
           const done = doneMap[stage.key];
-          const isLast = i === STAGES.length - 1;
           return (
             <React.Fragment key={stage.key}>
-              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 92 }}>
-                <Box
-                  sx={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: "50%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    bgcolor: done ? tokens.success : tokens.background,
-                    border: `1.5px solid ${done ? tokens.success : tokens.border}`,
-                    transition: "all 0.3s ease",
-                  }}
-                >
-                  <Icon size={18} color={done ? "#fff" : tokens.textSecondary} />
+              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 64 }}>
+                <Box sx={{ width: 36, height: 36, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", bgcolor: done ? tokens.success : tokens.background, border: `1.5px solid ${done ? tokens.success : tokens.border}`, transition: "all 300ms ease" }}>
+                  <Icon size={16} color={done ? "#fff" : tokens.textSecondary} />
                 </Box>
-                <Typography
-                  variant="body2"
-                  sx={{ mt: 1, fontWeight: 600, color: done ? tokens.text : tokens.textSecondary, textAlign: "center" }}
-                >
+                <Typography variant="body2" sx={{ mt: 0.8, fontWeight: 600, fontSize: "0.72rem", color: done ? tokens.text : tokens.textSecondary }}>
                   {stage.label}
                 </Typography>
-                {stage.key === "destroy" && (
-                  <Typography variant="caption" sx={{ color: tokens.textSecondary }}>
-                    waiting…
-                  </Typography>
-                )}
               </Box>
-              {!isLast && (
-                <Box
-                  sx={{
-                    flex: 1,
-                    height: 2,
-                    minWidth: 24,
-                    bgcolor: done ? tokens.success : tokens.border,
-                    borderRadius: 2,
-                    transition: "all 0.3s ease",
-                  }}
-                />
-              )}
+              {i < STAGES.length - 1 && <ArrowRight size={14} color={tokens.border} style={{ marginTop: -18 }} />}
             </React.Fragment>
           );
         })}
