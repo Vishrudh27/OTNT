@@ -13,7 +13,8 @@
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "express-validator": "^7.0.1",
+    "redis": "^6.2.1",
     "tweetnacl": "^1.0.3",
-    "uuid": "^9.0.1"
+    "uuid": "^14.0.1"
   }
 }

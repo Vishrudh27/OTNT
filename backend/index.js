@@ -7,6 +7,9 @@
  *   3. Encrypted config delivery (AES-256-GCM, keyed by the ECDH shared secret)
  *   4. Dual-condition expiry monitoring (time OR data volume)
  *   5. Manual/automatic tunnel teardown + crash-recovery cleanup
+ *   6. Redis-backed persistence (Objective 2) — tunnel records survive
+ *      backend restarts; the in-memory Map is now a CACHE, not the
+ *      source of truth.
  *
  * SECURITY FIX (earlier revision):
  * The backend NEVER generates or stores a WireGuard PRIVATE key on behalf of
@@ -18,26 +21,23 @@
  * that decodes to exactly 32 raw bytes (X25519 key size) before any
  * cryptographic or kernel-level operation touches them.
  *
- * DUAL-CONDITION RACE FIX (this revision):
- * Previously, the time-expiry timer and the data-cap monitor were two
- * independent setIntervals that could both fire in the same tick — each
- * would call clearInterval() on the other (which only stops FUTURE ticks,
- * not an already-running callback), so both could still proceed to call
- * deleteTunnel() and log their own audit line for the same tunnel. This
- * undermined the "dual-condition, whichever condition hits first" claim,
- * since the audit trail could show both conditions "winning" for one tunnel.
- * Fixed with a `t.terminating` flag checked AND set synchronously, before
- * any `await`, in both callbacks — JS only context-switches at await
- * points, so this guarantees only one condition can ever actually win.
+ * DUAL-CONDITION RACE FIX (earlier revision):
+ * The time-expiry timer and the data-cap monitor are two independent
+ * setIntervals that could both fire in the same tick. A `t.terminating`
+ * flag, checked AND set synchronously before any `await`, guarantees only
+ * one condition can ever actually win and call terminateTunnel().
  *
- * DATA-CAP POLLING GAP (documented, not eliminated — inherent to polling):
- * The data-cap monitor now polls every 250ms (down from 1000ms) instead of
- * once per second, shrinking the worst-case overshoot window 4x. Some
- * overshoot is unavoidable with any polling-based approach: in the worst
- * case, up to (throughput × polling interval) bytes beyond the configured
- * cap can cross the tunnel before termination fires. This should be stated
- * explicitly in the evaluation chapter as a known, quantified limitation
- * rather than presenting the cap as an exact real-time ceiling.
+ * REDIS PERSISTENCE (this revision — Objective 2, Step 1):
+ * Every mutation to a tunnel's state write-throughs to Redis via
+ * persistTunnel(). Live `setInterval` timer handles are NOT serializable,
+ * so they are stripped before writing and rebuilt fresh on rehydration.
+ *
+ * CRITICAL STARTUP ORDER (must not regress):
+ *   connectRedis() -> rehydrateTunnels() -> cleanupStartup() -> app.listen()
+ * rehydrateTunnels() MUST run before cleanupStartup(), because
+ * cleanupStaleTunnels() deletes any kernel interface not present in the
+ * `tunnels` Map. If the Map were still empty when that runs, every live
+ * tunnel's interface would be destroyed on every restart.
  */
 
 const express = require('express');
@@ -53,6 +53,7 @@ const { exec } = require('child_process');
 
 const wireguard = require('./wireguard');
 const audit = require('./auditLogger');
+const redisClient = require('./redisClient');
 
 const app = express();
 
@@ -65,8 +66,9 @@ const PORT = process.env.PORT || 3001;
 
 /**
  * In-memory tunnel registry.
- * NOTE: intentionally a plain Map for Objective 1 — persistence (Redis) is
- * planned for Objective 2 and is out of scope for this fix.
+ * As of Objective 2, this is a CACHE only. Redis (via redisClient.js) is
+ * the source of truth; every mutation here must be followed by a call to
+ * persistTunnel() to keep the two in sync.
  */
 const tunnels = new Map();
 
@@ -75,6 +77,15 @@ const DATA_MONITOR_INTERVAL_MS = 250;
 
 /** How often the time-expiry monitor checks, in ms. */
 const EXPIRY_MONITOR_INTERVAL_MS = 1000;
+
+/**
+ * Fallback Redis key TTL (seconds) for records that don't have a real
+ * tunnel expiry yet (e.g. a handshake-only record before /api/tunnel/create
+ * is called). This is a safety net so stale JSON can't live in Redis
+ * forever if the app crashes mid-handshake — it does NOT control any
+ * actual WireGuard teardown logic.
+ */
+const DEFAULT_TTL_SECONDS = 86400; // 24h
 
 /**
  * Placeholder token embedded in the client config TEMPLATE where the
@@ -135,6 +146,22 @@ async function getNextFreeWGInterface() {
   });
 }
 
+/**
+ * Checks whether a given interface name is currently live in the kernel.
+ * Used by rehydrateTunnels() to detect orphaned Redis records whose
+ * interface no longer exists (e.g. the machine rebooted, wiping all
+ * kernel state, but the Redis record itself survived).
+ */
+async function ifaceExists(ifaceName) {
+  return new Promise((resolve) => {
+    exec('wg show interfaces', (err, stdout) => {
+      if (err) return resolve(false);
+      const existing = stdout.split(/\s+/).filter(Boolean);
+      resolve(existing.includes(ifaceName));
+    });
+  });
+}
+
 /** Removes any leftover OTNT-owned WireGuard interfaces from the kernel. */
 async function cleanupOTNTInterfaces() {
   return new Promise((resolve) => {
@@ -157,10 +184,76 @@ async function cleanupOTNTInterfaces() {
 }
 
 /**
- * Ends a tunnel exactly once, no matter which condition (time or data cap)
- * triggered it. Both timer callbacks funnel through here. The `t.terminating`
- * flag is set synchronously by the CALLER, before this is invoked, so this
- * function can safely assume it's the only one tearing this tunnel down.
+ * Write-throughs a tunnel's current in-memory state to Redis.
+ * Strips the `timers` field (setInterval handles are not serializable)
+ * before writing. TTL is set generously past the tunnel's own expiry so
+ * Redis doesn't accumulate stale JSON, but the TTL itself never performs
+ * any actual teardown — that's still done by terminateTunnel().
+ */
+async function persistTunnel(tunnelId) {
+  const t = tunnels.get(tunnelId);
+  if (!t) return;
+
+  const { timers, ...serializable } = t;
+
+  let ttl = DEFAULT_TTL_SECONDS;
+  if (t.expiry) {
+    ttl = Math.max(1, Math.ceil((t.expiry - Date.now()) / 1000) + 300);
+  }
+
+  try {
+    await redisClient.saveTunnel(tunnelId, serializable, ttl);
+  } catch (e) {
+    console.error(`[REDIS] Failed to persist tunnel ${tunnelId}:`, e.message);
+  }
+}
+
+/**
+ * Starts (or restarts, on rehydration) the expiry and data-cap monitors
+ * for a tunnel, based on whatever t.expiry / t.dataCap are currently set
+ * to on the in-memory record. Factored out so both the normal creation
+ * path and the startup rehydration path share identical timer logic.
+ */
+function scheduleTimers(tunnelId) {
+  const t = tunnels.get(tunnelId);
+  if (!t) return;
+
+  if (t.expiry) {
+    t.timers.expiry = setInterval(() => {
+      if (t.terminating) return;
+      if (Date.now() >= t.expiry) {
+        t.terminating = true;
+        terminateTunnel(tunnelId, t, 'expired');
+      }
+    }, EXPIRY_MONITOR_INTERVAL_MS);
+  }
+
+  if (t.dataCap) {
+    t.timers.datamon = setInterval(async () => {
+      if (t.terminating) return;
+      try {
+        const used = await wireguard.getTransferBytes(t.ifaceName);
+        t.dataUsed = used;
+
+        if (t.terminating) return;
+
+        if (used >= t.dataCap) {
+          t.terminating = true;
+          await terminateTunnel(tunnelId, t, 'hit data cap and was deleted');
+        }
+      } catch (e) {
+        console.warn(`Data monitor read error for ${tunnelId}:`, e.message);
+      }
+    }, DATA_MONITOR_INTERVAL_MS);
+  }
+}
+
+/**
+ * Ends a tunnel exactly once, no matter which condition (time, data cap,
+ * or manual delete) triggered it. All three paths funnel through here.
+ * The `t.terminating` flag is set synchronously by the CALLER, before
+ * this is invoked, so this function can safely assume it's the only one
+ * tearing this tunnel down.
  */
 async function terminateTunnel(tunnelId, t, reason) {
   if (t.timers.expiry) clearInterval(t.timers.expiry);
@@ -171,7 +264,67 @@ async function terminateTunnel(tunnelId, t, reason) {
     /* already gone — fine, this is teardown, not creation */
   }
   tunnels.delete(tunnelId);
+  try {
+    await redisClient.deleteTunnel(tunnelId);
+  } catch (e) {
+    console.error(`[REDIS] Failed to delete tunnel ${tunnelId}:`, e.message);
+  }
   audit.log(`Tunnel ${tunnelId} ${reason}`);
+}
+
+/**
+ * Deletes an orphaned Redis record found at startup — one whose tunnel
+ * had already finished expiring/terminating, or whose kernel interface
+ * no longer exists (e.g. after a full machine reboot).
+ */
+async function cleanupOrphan(tunnelId, record) {
+  try {
+    if (record.ifaceName) await wireguard.deleteTunnel(record.ifaceName);
+  } catch {
+    /* interface may already be gone — fine */
+  }
+  try {
+    await redisClient.deleteTunnel(tunnelId);
+  } catch (e) {
+    console.error(`[REDIS] Failed to clean up orphan ${tunnelId}:`, e.message);
+  }
+  console.log(`[REHYDRATE] Cleaned up orphaned tunnel ${tunnelId}`);
+}
+
+/**
+ * Runs once at startup, BEFORE cleanupStartup(). Reads every tunnel
+ * record out of Redis and either:
+ *   - discards it (already terminating, already past expiry, or its
+ *     kernel interface no longer exists), or
+ *   - reloads it into the in-memory Map and restarts its timers.
+ */
+async function rehydrateTunnels() {
+  const records = await redisClient.getAllTunnels();
+
+  if (!records.length) {
+    console.log('[REDIS] No records found');
+    return;
+  }
+
+  console.log(`[REDIS] Found ${records.length} tunnel record(s)...`);
+
+  for (const { id, record } of records) {
+    const alreadyTerminating = record.terminating === true;
+    const alreadyExpired = record.expiry && Date.now() >= record.expiry;
+    const ifaceMissing = record.ifaceName ? !(await ifaceExists(record.ifaceName)) : false;
+
+    if (alreadyTerminating || alreadyExpired || ifaceMissing) {
+      await cleanupOrphan(id, record);
+      continue;
+    }
+
+    tunnels.set(id, { ...record, timers: {} });
+
+    if (record.ifaceName) {
+      scheduleTimers(id);
+      console.log(`Rehydrated tunnel ${id} (iface ${record.ifaceName})`);
+    }
+  }
 }
 
 // --- Health check ---
@@ -229,12 +382,10 @@ app.post('/api/handshake/init',
         dataUsed: 0,
         clientConfig: null,
         clientIfaceName: null,
-        // Mutual-exclusion guard: true once EITHER the expiry timer or the
-        // data-cap monitor has committed to tearing this tunnel down.
-        // Checked AND set synchronously (before any await) in both
-        // callbacks below, so only one condition can ever actually win.
         terminating: false
       });
+
+      await persistTunnel(tunnelId);
 
       audit.log(`Handshake init for ${tunnelId}`);
 
@@ -315,49 +466,15 @@ AllowedIPs = 0.0.0.0/0
 Endpoint = ${finalEndpoint}
 PersistentKeepalive = 25`;
 
-    // 6. Expiry timer (time-based condition).
     if (expirySeconds) {
       t.expiry = Date.now() + expirySeconds * 1000;
-      t.timers.expiry = setInterval(() => {
-        // Guard checked AND set synchronously, before any await, so a
-        // same-tick race with the data-cap monitor can only ever let ONE
-        // of the two branches proceed past this point.
-        if (t.terminating) return;
-        if (Date.now() >= t.expiry) {
-          t.terminating = true;
-          terminateTunnel(tunnelId, t, 'expired');
-        }
-      }, EXPIRY_MONITOR_INTERVAL_MS);
     }
-
-    // 7. Data-cap monitor (data-volume condition).
     if (dataCapBytes) {
       t.dataCap = dataCapBytes;
-      t.timers.datamon = setInterval(async () => {
-        if (t.terminating) return;
-        try {
-          const used = await wireguard.getTransferBytes(t.ifaceName);
-          // Only overwrite dataUsed on a SUCCESSFUL read — a failed read
-          // (e.g. interface mid-teardown) must not stomp the last known
-          // good value with a misleading zero.
-          t.dataUsed = used;
-
-          // Re-check the guard AFTER the await — the expiry timer could
-          // have won while this read was in flight.
-          if (t.terminating) return;
-
-          if (used >= t.dataCap) {
-            t.terminating = true;
-            await terminateTunnel(tunnelId, t, 'hit data cap and was deleted');
-          }
-        } catch (e) {
-          // getTransferBytes now throws instead of silently returning 0
-          // (see wireguard.js) — swallow here, keep last known t.dataUsed,
-          // and just try again on the next tick.
-          console.warn(`Data monitor read error for ${tunnelId}:`, e.message);
-        }
-      }, DATA_MONITOR_INTERVAL_MS);
     }
+
+    scheduleTimers(tunnelId);
+    await persistTunnel(tunnelId);
 
     audit.log(`Tunnel created: ${tunnelId}`);
     res.json({
@@ -421,8 +538,6 @@ app.get('/api/tunnel/status/:id', async (req, res) => {
       const used = await wireguard.getTransferBytes(t.ifaceName);
       t.dataUsed = used; // only overwrite on a successful read
     } catch (e) {
-      // Keep last known t.dataUsed instead of resetting to 0 on a
-      // transient read failure (e.g. interface mid-teardown).
       console.warn(`Status read error for ${t.id}:`, e.message);
     }
 
@@ -450,20 +565,13 @@ app.post('/api/tunnel/delete', body('tunnelId').isString().notEmpty(), async (re
   const t = tunnels.get(tunnelId);
   if (!t) return res.status(404).json({ error: 'Not found' });
 
+  if (t.terminating) {
+    return res.status(409).json({ error: 'Tunnel is already being terminated' });
+  }
+  t.terminating = true;
+
   try {
-    // A manual delete is itself a form of termination — set the same guard
-    // so a timer that's mid-flight can't also try to tear this down.
-    if (t.terminating) {
-      return res.status(409).json({ error: 'Tunnel is already being terminated' });
-    }
-    t.terminating = true;
-
-    if (t.timers.expiry) clearInterval(t.timers.expiry);
-    if (t.timers.datamon) clearInterval(t.timers.datamon);
-
-    await wireguard.deleteTunnel(t.ifaceName);
-    tunnels.delete(tunnelId);
-    audit.log(`Tunnel deleted: ${tunnelId}`);
+    await terminateTunnel(tunnelId, t, 'manually deleted');
     res.json({ message: 'Deleted' });
   } catch (e) {
     console.error('Delete tunnel error:', e);
@@ -494,7 +602,23 @@ async function cleanupStartup() {
   }
 }
 
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`🚀 OTNT Backend listening at http://0.0.0.0:${PORT}`);
+/**
+ * Startup sequence. Order is critical — see the file header comment.
+ */
+async function main() {
+  try {
+    await redisClient.connectRedis();
+  } catch (e) {
+    console.error('[REDIS] Connection failed — cannot start without persistence:', e.message);
+    process.exit(1);
+  }
+
+  await rehydrateTunnels();
   await cleanupStartup();
-});
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 OTNT Backend listening at http://0.0.0.0:${PORT}`);
+  });
+}
+
+main();
