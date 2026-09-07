@@ -27,17 +27,38 @@
  * flag, checked AND set synchronously before any `await`, guarantees only
  * one condition can ever actually win and call terminateTunnel().
  *
- * REDIS PERSISTENCE (this revision — Objective 2, Step 1):
+ * REDIS PERSISTENCE (earlier revision — Objective 2, Step 1):
  * Every mutation to a tunnel's state write-throughs to Redis via
  * persistTunnel(). Live `setInterval` timer handles are NOT serializable,
  * so they are stripped before writing and rebuilt fresh on rehydration.
  *
+ * CONCURRENT-TUNNEL FIX (this revision):
+ * Previously, /api/tunnel/create called cleanupOTNTInterfaces() on EVERY
+ * request, which deleted every interface whose name started with "wg" or
+ * "client" unconditionally — meaning creating tunnel #2 silently destroyed
+ * tunnel #1 (and would have deleted a user's own unrelated wg0 as
+ * collateral). That call is removed.
+ * Interfaces are now named `otnt<N>` and registered in a Redis ownership
+ * set (see wireguard.js's isOTNTOwned()) BEFORE `wg-quick up` runs, and
+ * each tunnel gets its own ListenPort from a managed pool instead of the
+ * old hardcoded 51820 in base.conf — both are what make it safe (and
+ * functional) to run more than one tunnel at once. Teardown paths now also
+ * release the IP/port allocations, closing a leak the old in-memory
+ * `reservedIPs` Set never fixed (nothing ever called `.delete()` on it).
+ * The `terminating` flag is now persisted to Redis at the moment it's set
+ * (not just held in memory), so a crash mid-teardown is correctly
+ * recognized as an orphan on the next rehydration instead of reloaded as
+ * if still live.
+ *
  * CRITICAL STARTUP ORDER (must not regress):
  *   connectRedis() -> rehydrateTunnels() -> cleanupStartup() -> app.listen()
  * rehydrateTunnels() MUST run before cleanupStartup(), because
- * cleanupStaleTunnels() deletes any kernel interface not present in the
- * `tunnels` Map. If the Map were still empty when that runs, every live
- * tunnel's interface would be destroyed on every restart.
+ * cleanupStaleTunnels() deletes any OTNT-owned kernel interface not present
+ * in the `tunnels` Map. If the Map were still empty when that runs, every
+ * live tunnel's interface would be destroyed on every restart. For the same
+ * reason, a rehydrateTunnels() failure is now treated as fatal (like a
+ * connectRedis() failure) rather than let startup continue on an
+ * incomplete Map into cleanupStartup().
  */
 
 const express = require('express');
@@ -131,21 +152,6 @@ function getHostIP() {
   return '127.0.0.1';
 }
 
-/** Picks the next WireGuard interface name (wgN) not currently reported by `wg show interfaces`. */
-async function getNextFreeWGInterface() {
-  return new Promise((resolve, reject) => {
-    exec('wg show interfaces', (err, stdout) => {
-      if (err) return reject(err);
-      const existing = stdout.split(/\s+/).filter(Boolean);
-      for (let i = 1; i < 9999; i++) {
-        const name = `wg${i}`;
-        if (!existing.includes(name)) return resolve(name);
-      }
-      reject(new Error('No free WireGuard interface available'));
-    });
-  });
-}
-
 /**
  * Checks whether a given interface name is currently live in the kernel.
  * Used by rehydrateTunnels() to detect orphaned Redis records whose
@@ -158,27 +164,6 @@ async function ifaceExists(ifaceName) {
       if (err) return resolve(false);
       const existing = stdout.split(/\s+/).filter(Boolean);
       resolve(existing.includes(ifaceName));
-    });
-  });
-}
-
-/** Removes any leftover OTNT-owned WireGuard interfaces from the kernel. */
-async function cleanupOTNTInterfaces() {
-  return new Promise((resolve) => {
-    exec('wg show interfaces', (err, stdout) => {
-      if (err) return resolve();
-      const interfaces = stdout.split(/\s+/).filter(Boolean)
-        .filter((iface) => iface.startsWith('wg') || iface.startsWith('client'));
-      if (!interfaces.length) return resolve();
-
-      let pending = interfaces.length;
-      interfaces.forEach((iface) => {
-        exec(`sudo ip link delete ${iface}`, (err2) => {
-          if (!err2) console.log(`[WG CLEANUP] Removed ${iface}`);
-          else console.warn(`[WG CLEANUP] Failed to remove ${iface}: ${err2.message}`);
-          if (--pending === 0) resolve();
-        });
-      });
     });
   });
 }
@@ -213,17 +198,26 @@ async function persistTunnel(tunnelId) {
  * for a tunnel, based on whatever t.expiry / t.dataCap are currently set
  * to on the in-memory record. Factored out so both the normal creation
  * path and the startup rehydration path share identical timer logic.
+ *
+ * FIX (concurrent-tunnel pass): both branches now persist the
+ * `terminating` flag to Redis at the moment it's set, before teardown
+ * actually runs — previously it only ever lived in memory, so
+ * rehydrateTunnels()'s `record.terminating === true` check could never
+ * fire and a crash mid-teardown would reload a half-dead tunnel as live.
+ * The expiry branch is now `async` (it wasn't before) so it can await
+ * that persist — setInterval doesn't care whether its callback is async.
  */
 function scheduleTimers(tunnelId) {
   const t = tunnels.get(tunnelId);
   if (!t) return;
 
   if (t.expiry) {
-    t.timers.expiry = setInterval(() => {
+    t.timers.expiry = setInterval(async () => {
       if (t.terminating) return;
       if (Date.now() >= t.expiry) {
         t.terminating = true;
-        terminateTunnel(tunnelId, t, 'expired');
+        await persistTunnel(tunnelId);
+        await terminateTunnel(tunnelId, t, 'expired');
       }
     }, EXPIRY_MONITOR_INTERVAL_MS);
   }
@@ -239,6 +233,7 @@ function scheduleTimers(tunnelId) {
 
         if (used >= t.dataCap) {
           t.terminating = true;
+          await persistTunnel(tunnelId);
           await terminateTunnel(tunnelId, t, 'hit data cap and was deleted');
         }
       } catch (e) {
@@ -251,18 +246,28 @@ function scheduleTimers(tunnelId) {
 /**
  * Ends a tunnel exactly once, no matter which condition (time, data cap,
  * or manual delete) triggered it. All three paths funnel through here.
- * The `t.terminating` flag is set synchronously by the CALLER, before
- * this is invoked, so this function can safely assume it's the only one
- * tearing this tunnel down.
+ * The `t.terminating` flag is set (and persisted) synchronously by the
+ * CALLER, before this is invoked, so this function can safely assume it's
+ * the only one tearing this tunnel down.
+ *
+ * FIX (concurrent-tunnel pass): also releases the server AND client IP
+ * (a tunnel holds two, but wireguard.deleteTunnel() only knows about one
+ * interface) and the listen port, so a restart cycle can no longer leak
+ * them the way the old in-memory `reservedIPs` Set always did.
  */
 async function terminateTunnel(tunnelId, t, reason) {
   if (t.timers.expiry) clearInterval(t.timers.expiry);
   if (t.timers.datamon) clearInterval(t.timers.datamon);
   try {
-    await wireguard.deleteTunnel(t.ifaceName);
-  } catch {
-    /* already gone — fine, this is teardown, not creation */
+    await wireguard.deleteTunnel(t.ifaceName, { listenPort: t.listenPort });
+  } catch (e) {
+    // Either already gone (fine, this is teardown not creation) or an
+    // ownership mismatch (shouldn't happen under correct operation, but
+    // worth surfacing rather than silently swallowing if it ever does).
+    console.warn(`[WG] Teardown for ${tunnelId} (${t.ifaceName}) reported an issue:`, e.message);
   }
+  await wireguard.releaseIP(t.serverIP);
+  await wireguard.releaseIP(t.clientIP);
   tunnels.delete(tunnelId);
   try {
     await redisClient.deleteTunnel(tunnelId);
@@ -276,13 +281,18 @@ async function terminateTunnel(tunnelId, t, reason) {
  * Deletes an orphaned Redis record found at startup — one whose tunnel
  * had already finished expiring/terminating, or whose kernel interface
  * no longer exists (e.g. after a full machine reboot).
+ * FIX (concurrent-tunnel pass): also releases the orphan's IP/port
+ * allocations — previously these leaked forever on every orphan cleanup.
  */
 async function cleanupOrphan(tunnelId, record) {
   try {
-    if (record.ifaceName) await wireguard.deleteTunnel(record.ifaceName);
+    if (record.ifaceName) await wireguard.deleteTunnel(record.ifaceName, { listenPort: record.listenPort });
   } catch {
-    /* interface may already be gone — fine */
+    /* interface may already be gone, or not owned — either way, still
+       release our own bookkeeping below */
   }
+  await wireguard.releaseIP(record.serverIP);
+  await wireguard.releaseIP(record.clientIP);
   try {
     await redisClient.deleteTunnel(tunnelId);
   } catch (e) {
@@ -367,6 +377,7 @@ app.post('/api/handshake/init',
       tunnels.set(tunnelId, {
         id: tunnelId,
         ifaceName: null,
+        listenPort: null,
         wgPriv,
         wgPub,
         serverIP,
@@ -404,6 +415,16 @@ app.post('/api/handshake/init',
 
 /**
  * POST /api/tunnel/create
+ *
+ * FIX (concurrent-tunnel pass): this used to call cleanupOTNTInterfaces()
+ * unconditionally, which deleted every interface whose name started with
+ * "wg" or "client" before creating the new one — meaning tunnel #2 always
+ * destroyed tunnel #1. That call is gone. The interface name now comes from
+ * wireguard.getNextFreeOTNTInterface() (otnt<N>, registry-checked) instead
+ * of the old getNextFreeWGInterface() (wg<N>, no ownership concept), and a
+ * ListenPort is allocated per-tunnel via wireguard.getNextFreePort() —
+ * previously every tunnel shared the single hardcoded 51820 in base.conf,
+ * which also made a second concurrent interface unable to bind at all.
  */
 app.post('/api/tunnel/create', [
   body('tunnelId').isString().notEmpty(),
@@ -436,11 +457,11 @@ app.post('/api/tunnel/create', [
       });
     }
 
-    await cleanupOTNTInterfaces();
-    const ifaceName = await getNextFreeWGInterface();
+    const ifaceName = await wireguard.getNextFreeOTNTInterface();
+    const listenPort = await wireguard.getNextFreePort();
 
     const hostIP = endpoint || getHostIP();
-    const finalEndpoint = `${hostIP}:51820`;
+    const finalEndpoint = `${hostIP}:${listenPort}`;
 
     const result = await wireguard.createTunnel({
       privateKey: t.wgPriv,
@@ -448,10 +469,12 @@ app.post('/api/tunnel/create', [
       peerPublicKey,
       allowedIPs: t.clientIP,
       endpoint: finalEndpoint,
-      ifaceName
+      ifaceName,
+      listenPort
     });
 
     t.ifaceName = result.ifaceName;
+    t.listenPort = result.listenPort;
     t.peerPublicKey = peerPublicKey;
     t.clientIfaceName = `wg${tunnelId.slice(0, 8)}`;
 
@@ -546,6 +569,7 @@ app.get('/api/tunnel/status/:id', async (req, res) => {
     res.json({
       tunnelId: t.id,
       iface: t.ifaceName,
+      listenPort: t.listenPort,
       serverIP: t.serverIP,
       clientIP: t.clientIP,
       timeLeftSeconds: timeLeft,
@@ -569,6 +593,7 @@ app.post('/api/tunnel/delete', body('tunnelId').isString().notEmpty(), async (re
     return res.status(409).json({ error: 'Tunnel is already being terminated' });
   }
   t.terminating = true;
+  await persistTunnel(tunnelId);
 
   try {
     await terminateTunnel(tunnelId, t, 'manually deleted');
@@ -584,6 +609,7 @@ app.get('/api/tunnel/list', (_req, res) => {
   res.json(Array.from(tunnels.values()).map((t) => ({
     tunnelId: t.id,
     iface: t.ifaceName,
+    listenPort: t.listenPort,
     serverIP: t.serverIP,
     clientIP: t.clientIP,
     expiresAt: t.expiry,
@@ -613,7 +639,19 @@ async function main() {
     process.exit(1);
   }
 
-  await rehydrateTunnels();
+  try {
+    await rehydrateTunnels();
+  } catch (e) {
+    // FIX (concurrent-tunnel pass): rehydration failing partway through is
+    // dangerous to proceed past — cleanupStartup() -> cleanupStaleTunnels()
+    // deletes any OTNT-owned interface not present in the `tunnels` Map, so
+    // an incomplete rehydration could make it treat a genuinely live
+    // tunnel as stale and tear it down. Fail loud here, the same way a
+    // connectRedis() failure already does, rather than risk that silently.
+    console.error('[REDIS] Rehydration failed — refusing to continue startup:', e.message);
+    process.exit(1);
+  }
+
   await cleanupStartup();
 
   app.listen(PORT, '0.0.0.0', () => {
