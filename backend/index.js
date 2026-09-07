@@ -75,6 +75,7 @@ const { exec } = require('child_process');
 const wireguard = require('./wireguard');
 const audit = require('./auditLogger');
 const redisClient = require('./redisClient');
+const cryptoUtils = require('./cryptoUtils');
 
 const app = express();
 
@@ -117,29 +118,11 @@ const DEFAULT_TTL_SECONDS = 86400; // 24h
  */
 const CLIENT_PRIVATE_KEY_PLACEHOLDER = '__OTNT_CLIENT_PRIVATE_KEY__';
 
-// --- Base64 <-> Uint8Array helpers ---
-const u8ToB64 = (u8) => Buffer.from(u8).toString('base64');
-const b64ToU8 = (b64) => Uint8Array.from(Buffer.from(b64, 'base64'));
-
-/**
- * Validates that a string is a well-formed X25519 key encoded as base64.
- */
-function isValidX25519KeyB64(value) {
-  if (typeof value !== 'string') return false;
-  if (!/^[A-Za-z0-9+/]{42,44}={0,2}$/.test(value)) return false;
-  try {
-    const decoded = Buffer.from(value, 'base64');
-    return decoded.length === 32;
-  } catch {
-    return false;
-  }
-}
-
-/** Generates a fresh X25519 (WireGuard-compatible) keypair. */
-function generateWireGuardKeys() {
-  const kp = nacl.box.keyPair();
-  return { privateKey: u8ToB64(kp.secretKey), publicKey: u8ToB64(kp.publicKey) };
-}
+// --- Base64 <-> Uint8Array helpers, key validation, keygen (backend/cryptoUtils.js) ---
+// Extracted to a side-effect-free module so the Jest suite can exercise the
+// real crypto code without requiring this file (which calls main() at the
+// bottom and would try to bind a port and connect to Redis on import).
+const { u8ToB64, b64ToU8, isValidX25519KeyB64, generateWireGuardKeys } = cryptoUtils;
 
 /** Returns the first non-loopback IPv4 address of this host, for auto endpoint detection. */
 function getHostIP() {
@@ -367,7 +350,7 @@ app.post('/api/handshake/init',
 
       const clientPubU8 = b64ToU8(clientECDHPublicKey);
       const serverKeyPair = nacl.box.keyPair();
-      const sharedSecret = nacl.scalarMult(serverKeyPair.secretKey, clientPubU8);
+      const sharedSecret = cryptoUtils.deriveSharedSecret(serverKeyPair.secretKey, clientPubU8);
       const { privateKey: wgPriv, publicKey: wgPub } = generateWireGuardKeys();
 
       const tunnelId = uuidv4();
@@ -529,19 +512,14 @@ app.post('/api/tunnel/:id/client-config', async (req, res) => {
 
     const clientPub = b64ToU8(clientPubB64);
     const serverPriv = b64ToU8(t.serverECDHPrivateKey);
-    const shared = nacl.scalarMult(serverPriv, clientPub);
+    const shared = cryptoUtils.deriveSharedSecret(serverPriv, clientPub);
 
-    const aesKey = crypto.createHash('sha256').update(Buffer.from(shared)).digest();
-
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
-    const ciphertext = Buffer.concat([cipher.update(t.clientConfig, 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
+    const { iv, tag, ciphertext } = cryptoUtils.encryptWithSharedSecret(shared, t.clientConfig);
 
     res.json({
-      iv: iv.toString('base64'),
-      tag: tag.toString('base64'),
-      ciphertext: ciphertext.toString('base64'),
+      iv,
+      tag,
+      ciphertext,
       serverECDHPublicKey: t.serverECDHPublicKey,
       ifaceName: t.clientIfaceName
     });
@@ -659,4 +637,17 @@ async function main() {
   });
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  app,
+  tunnels,
+  scheduleTimers,
+  terminateTunnel,
+  cleanupOrphan,
+  persistTunnel,
+  rehydrateTunnels,
+  ifaceExists
+};
