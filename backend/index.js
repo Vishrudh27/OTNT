@@ -61,6 +61,8 @@
  * incomplete Map into cleanupStartup().
  */
 
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -79,10 +81,52 @@ const cryptoUtils = require('./cryptoUtils');
 
 const app = express();
 
+/**
+ * CORS_ORIGINS (Objective 3): comma-separated allowed origins, set via
+ * .env (see .env.example). Falls back to the original dev-only origins
+ * so behavior is unchanged if the var isn't set.
+ */
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://192.168.29.17:5173')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 // --- Global middleware ---
-app.use(cors({ origin: ["http://localhost:5173", "http://192.168.29.17:5173"] }));
+app.use(cors({ origin: CORS_ORIGINS }));
 app.use(bodyParser.json());
+// Coarse safety-net cap across everything; per-endpoint limiters below are
+// the real budget for the sensitive routes.
 app.use(rateLimit({ windowMs: 60_000, max: 400 }));
+
+/**
+ * Per-endpoint rate limits (Objective 3). Handshake and tunnel-create are
+ * expensive/state-creating and get tight per-IP budgets; status polling is
+ * cheap, read-only, and legitimately called ~once/second per open tab, so
+ * it gets its own much higher budget instead of sharing the create limits.
+ */
+const handshakeLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many handshake attempts, please try again shortly' }
+});
+
+const tunnelCreateLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many tunnel creation attempts, please try again shortly' }
+});
+
+const statusLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many status requests, please slow down' }
+});
 
 const PORT = process.env.PORT || 3001;
 
@@ -327,6 +371,7 @@ app.get('/', (_req, res) => res.send('OTNT Backend up ✅'));
  * POST /api/handshake/init
  */
 app.post('/api/handshake/init',
+  handshakeLimiter,
   body('clientECDHPublicKey')
     .isString().notEmpty()
     .custom((value) => {
@@ -410,6 +455,7 @@ app.post('/api/handshake/init',
  * which also made a second concurrent interface unable to bind at all.
  */
 app.post('/api/tunnel/create', [
+  tunnelCreateLimiter,
   body('tunnelId').isString().notEmpty(),
   body('peerPublicKey')
     .isString().notEmpty()
@@ -530,7 +576,7 @@ app.post('/api/tunnel/:id/client-config', async (req, res) => {
 });
 
 // --- Tunnel status ---
-app.get('/api/tunnel/status/:id', async (req, res) => {
+app.get('/api/tunnel/status/:id', statusLimiter, async (req, res) => {
   const t = tunnels.get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Not found' });
 
