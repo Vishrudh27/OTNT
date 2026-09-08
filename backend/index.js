@@ -285,13 +285,22 @@ function scheduleTimers(tunnelId) {
 async function terminateTunnel(tunnelId, t, reason) {
   if (t.timers.expiry) clearInterval(t.timers.expiry);
   if (t.timers.datamon) clearInterval(t.timers.datamon);
-  try {
-    await wireguard.deleteTunnel(t.ifaceName, { listenPort: t.listenPort });
-  } catch (e) {
-    // Either already gone (fine, this is teardown not creation) or an
-    // ownership mismatch (shouldn't happen under correct operation, but
-    // worth surfacing rather than silently swallowing if it ever does).
-    console.warn(`[WG] Teardown for ${tunnelId} (${t.ifaceName}) reported an issue:`, e.message);
+  // A tunnel can be deleted after only a handshake (no /api/tunnel/create
+  // call yet), in which case it never got a real kernel interface —
+  // ifaceName is still null. That's a normal, expected case, not an error,
+  // so skip the kernel-level teardown entirely instead of letting it hit
+  // wireguard.deleteTunnel()'s isValidIfaceName() rejection and rely on the
+  // catch below to paper over it. Matches the same guard cleanupOrphan()
+  // already uses for the equivalent case.
+  if (t.ifaceName) {
+    try {
+      await wireguard.deleteTunnel(t.ifaceName, { listenPort: t.listenPort });
+    } catch (e) {
+      // Either already gone (fine, this is teardown not creation) or an
+      // ownership mismatch (shouldn't happen under correct operation, but
+      // worth surfacing rather than silently swallowing if it ever does).
+      console.warn(`[WG] Teardown for ${tunnelId} (${t.ifaceName}) reported an issue:`, e.message);
+    }
   }
   await wireguard.releaseIP(t.serverIP);
   await wireguard.releaseIP(t.clientIP);
