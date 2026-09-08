@@ -14,7 +14,7 @@ function formatTime(seconds) {
 
 function StatField({ icon: Icon, label, value, color }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", justifyBetween: "space-between", py: 1.5, borderBottom: `1px solid ${tokens.border}` }}>
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", py: 1.5, borderBottom: `1px solid ${tokens.border}` }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
         <Icon size={14} color={tokens.textSecondary} />
         <Typography variant="body2" sx={{ color: tokens.textSecondary, fontSize: "0.8rem" }}>{label}</Typography>
@@ -162,7 +162,7 @@ export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
           }}
         >
           <Box>
-            <Box sx={{ display: "flex", alignItems: "center", justifyBetween: "space-between", mb: 2 }}>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
               <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, color: tokens.text }}>
                 Tunnel Statistics
               </Typography>
@@ -222,7 +222,7 @@ export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2, pt: 1.5, borderTop: `1px solid ${tokens.border}` }}>
             <Activity size={14} color={tokens.success} />
             <Typography variant="body2" sx={{ fontSize: "0.72rem", color: tokens.textSecondary }}>
-              Data sync interval: 250ms
+              Data sync interval: 1000ms
             </Typography>
           </Box>
         </Paper>

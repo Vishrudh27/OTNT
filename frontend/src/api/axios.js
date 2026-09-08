@@ -1,9 +1,9 @@
 
 import axios from "axios";
 
-// Base URL matches backend
+// Base URL matches backend. Overridable via VITE_API_BASE (see .env.example).
 const api = axios.create({
-  baseURL: "http://localhost:3001/api", // backend + /api
+  baseURL: import.meta.env.VITE_API_BASE || "http://localhost:3001/api",
   headers: { "Content-Type": "application/json" }
 });
 

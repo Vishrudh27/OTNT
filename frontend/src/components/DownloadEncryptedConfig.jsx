@@ -1,11 +1,11 @@
 // frontend/src/components/DownloadEncryptedConfig.jsx
 import React, { useState } from "react";
-import axios from "axios";
 import nacl from "tweetnacl";
 import { Button, Box, Typography, Alert, CircularProgress, Paper, Fade, Chip, Grid } from "@mui/material";
 import { QRCodeCanvas } from "qrcode.react";
 import { Download, Lock, Shield, Wifi } from "lucide-react";
 
+import api from "../api/axios";
 import { deriveAESKeyFromShared, decryptAESGCM, downloadAsFile } from "../utils/cryptoClient";
 import { tokens } from "../theme";
 
@@ -23,8 +23,6 @@ function decodeBase64(b64) {
   return bytes;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001/api";
-
 export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, onConfigReady, md = 4 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -40,7 +38,7 @@ export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, on
       const ephemeralKeyPair = nacl.box.keyPair();
       const ephemeralPublicKeyB64 = encodeBase64(ephemeralKeyPair.publicKey);
 
-      const resp = await axios.post(`${API_BASE}/tunnel/${tunnelId}/client-config`, { clientECDHPublicKey: ephemeralPublicKeyB64 });
+      const resp = await api.post(`/tunnel/${tunnelId}/client-config`, { clientECDHPublicKey: ephemeralPublicKeyB64 });
       const { iv, tag, ciphertext, serverECDHPublicKey } = resp.data;
 
       const serverPubU8 = decodeBase64(serverECDHPublicKey);

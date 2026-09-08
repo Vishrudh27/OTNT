@@ -13,7 +13,8 @@
 //   OTNT from ever touching a user's own wg0/wg1/etc., and is also why a
 //   Redis flush while tunnels are live means OTNT will refuse to reclaim
 //   its own interfaces (fail-safe, not fail-destructive) — accepted
-//   tradeoff, see OTNT_CLAUDE_CODE.md.
+//   tradeoff; see scripts/reap.js for the manual, confirmation-gated
+//   operator recovery path for exactly this scenario.
 //
 // Previously (single-tunnel era) index.js called cleanupOTNTInterfaces()
 // on every /api/tunnel/create, which deleted every wg*/client* interface

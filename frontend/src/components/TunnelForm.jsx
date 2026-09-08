@@ -1,7 +1,7 @@
 // frontend/src/components/TunnelForm.jsx
 import React, { useState } from "react";
 import { handshakeInit, createTunnel } from "../api/axios";
-import { generateWireGuardKeys, generateECDHKeys, computeSharedSecret } from "../utils/wireguardKeys";
+import { generateWireGuardKeys, generateECDHKeys } from "../utils/wireguardKeys";
 import { TextField, Button, Box, Typography, Alert, Paper, CircularProgress, InputAdornment } from "@mui/material";
 import { Shield, Network, Timer, Database } from "lucide-react";
 import { tokens } from "../theme";
@@ -10,7 +10,6 @@ export default function TunnelForm({ onTunnelCreated }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
-    allowedIPs: "10.77.0.2/32",
     endpoint: "",
     expirySeconds: 120,
     dataCapMB: ""
@@ -27,12 +26,10 @@ export default function TunnelForm({ onTunnelCreated }) {
       const ecdh = generateECDHKeys();
       const res = await handshakeInit(ecdh.publicKeyB64);
       const tunnelId = res.data.tunnelId;
-      computeSharedSecret(ecdh.privateKey, res.data.serverECDHPublicKey);
 
       const payload = {
         tunnelId,
         peerPublicKey: wg.publicKey,
-        allowedIPs: form.allowedIPs,
         endpoint: form.endpoint || undefined,
         expirySeconds: form.expirySeconds ? Number(form.expirySeconds) : undefined,
         dataCapBytes: form.dataCapMB ? Math.round(Number(form.dataCapMB) * 1024 * 1024) : undefined

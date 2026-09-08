@@ -465,7 +465,6 @@ app.post('/api/tunnel/create', [
       }
       return true;
     }),
-  body('allowedIPs').isString().notEmpty(),
   body('endpoint').optional().isString(),
   body('expirySeconds').optional().isInt({ min: 5, max: 86400 }),
   body('dataCapBytes').optional().isInt({ min: 1 })
