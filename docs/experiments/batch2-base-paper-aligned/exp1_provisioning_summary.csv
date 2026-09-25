@@ -1,0 +1,2 @@
+metric,n,mean,median,stdev,ci95_halfwidth,ci95_low,ci95_high
+provisioning_latency_ms,20.000,666.100,617.500,141.114,66.043,600.057,732.143
