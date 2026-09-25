@@ -168,8 +168,15 @@ const CLIENT_PRIVATE_KEY_PLACEHOLDER = '__OTNT_CLIENT_PRIVATE_KEY__';
 // bottom and would try to bind a port and connect to Redis on import).
 const { u8ToB64, b64ToU8, isValidX25519KeyB64, generateWireGuardKeys } = cryptoUtils;
 
-/** Returns the first non-loopback IPv4 address of this host, for auto endpoint detection. */
+/**
+ * Returns the address to advertise as a tunnel's WireGuard Endpoint.
+ * PUBLIC_HOST overrides everything — required behind NAT (e.g. a cloud VM,
+ * where the first non-loopback interface is a private 10.x/172.x address,
+ * not the public IP clients can actually reach). Falls back to interface
+ * auto-detection for local/LAN dev, same as before.
+ */
 function getHostIP() {
+  if (process.env.PUBLIC_HOST) return process.env.PUBLIC_HOST;
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {

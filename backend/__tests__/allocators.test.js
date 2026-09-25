@@ -75,27 +75,33 @@ describe('IP allocator (10.77.0.x pool)', () => {
     expect(store.has('5')).toBe(false);
   });
 
-  test('concurrent allocation without external serialization can race (documented pre-existing gap)', async () => {
-    // getNextFreeIP() has no lock of its own (unlike wireguard.js's
-    // createTunnel(), which serializes iface/port allocation internally via
-    // tunnelCreationLock). index.js's /api/handshake/init calls
-    // getNextFreeIP() twice SEQUENTIALLY per request (safe — the second
-    // call's read sees the first call's write), but two DIFFERENT concurrent
-    // requests racing this function have no such protection. This test
-    // documents that reality rather than asserting a guarantee the code
-    // does not actually make; see docs/phase3-concurrency-test.md and the
-    // Phase 4 write-up for context. If this starts failing, it likely means
-    // someone added the missing lock — update this test to assert
-    // uniqueness instead.
+  test('concurrent allocation is serialized by allocationLock — always distinct', async () => {
+    // getNextFreeIP/getNextFreePort/getNextFreeOTNTInterface now share a
+    // module-level allocationLock (wireguard.js) that serializes their
+    // read-then-reserve, closing the race two concurrent
+    // /api/handshake/init or /api/tunnel/create requests could otherwise
+    // hit (see docs/phase3-concurrency-test.md and the Phase 4 write-up).
     backSetWithRedisMock(new Set());
     const results = await Promise.all([
       wireguard.getNextFreeIP(),
       wireguard.getNextFreeIP(),
       wireguard.getNextFreeIP()
     ]);
-    const uniqueCount = new Set(results).size;
-    expect(uniqueCount).toBeGreaterThanOrEqual(1);
-    expect(uniqueCount).toBeLessThanOrEqual(3);
+    expect(new Set(results).size).toBe(3);
+    expect(results.sort()).toEqual(['10.77.0.2/32', '10.77.0.3/32', '10.77.0.4/32']);
+  });
+
+  test('a failed allocation does not permanently wedge the lock for later callers', async () => {
+    // Exhaust the pool so one call rejects, then confirm a subsequent call
+    // still runs (the lock's gate promise must always resolve, even when
+    // the wrapped call throws).
+    const store = new Set();
+    for (let i = 2; i < 255; i++) store.add(String(i));
+    backSetWithRedisMock(store);
+    await expect(wireguard.getNextFreeIP()).rejects.toThrow(/No free 10\.77\.0\.x/);
+
+    store.delete('2');
+    await expect(wireguard.getNextFreeIP()).resolves.toBe('10.77.0.2/32');
   });
 });
 
@@ -131,6 +137,17 @@ describe('Listen-port allocator (51820-51869 pool)', () => {
     backSetWithRedisMock(new Set());
     await expect(wireguard.releasePort(null)).resolves.toBeUndefined();
     await expect(wireguard.releasePort(undefined)).resolves.toBeUndefined();
+  });
+
+  test('concurrent allocation is serialized by allocationLock — always distinct', async () => {
+    backSetWithRedisMock(new Set());
+    const results = await Promise.all([
+      wireguard.getNextFreePort(),
+      wireguard.getNextFreePort(),
+      wireguard.getNextFreePort()
+    ]);
+    expect(new Set(results).size).toBe(3);
+    expect(results.sort((a, b) => a - b)).toEqual([51820, 51821, 51822]);
   });
 });
 

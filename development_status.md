@@ -114,11 +114,12 @@ All three batches used **real WireGuard kernel interfaces** via Linux network na
 
 ## 6. Current uncommitted state (as of this document)
 
-Nothing has been committed by Claude this session. Working tree currently has:
-- `backend/auditLogger.js` — modified (file-sink addition, see §2). Small, backward-compatible (still logs to stdout as before).
-- Untracked: `CLAUDE_SESSION_HANDBOOK.md`, `docs/experiments/` (all three batches), `docs/phase5-aof-persistence-test.md`, `docs/reproducibility.md`, this file (`development_status.md`).
+Everything described in this document as "uncommitted" earlier has since been committed by the user themselves (`backend/auditLogger.js` file-sink change, `CLAUDE_SESSION_HANDBOOK.md`, `docs/experiments/`, `docs/phase5-aof-persistence-test.md`, `docs/reproducibility.md`, this file — all landed in `ef11407 "Docs Required for the Project Completion"`, 2026-09-25). Tree was clean as of that commit.
+
+Since then, a UI verification pass found and fixed two frontend bugs (`TunnelStatus.jsx` hardcoded listen port instead of using `status.listenPort`; `App.jsx` never received live `ifaceName`/`serverIP`/`clientIP` from the status poll), and a real allocator race (`getNextFreeIP`/`getNextFreePort`/`getNextFreeOTNTInterface` had no lock of their own, called ahead of `wireguard.js`'s `tunnelCreationLock`) was closed with a dedicated `allocationLock` in `wireguard.js`, with `backend/__tests__/allocators.test.js` updated to assert uniqueness under concurrency instead of just documenting the gap.
+
 - `backend/audit.log` is a runtime-generated file, gitignored via the existing `*.log` rule — don't try to commit it, it's local experiment-run output, not source.
-- Seven harmless leftover `iperf3 -s` background processes may still be running (one-shot servers whose client tunnel was severed mid-transfer during Batch 3 — each bound to a unique, never-reused port, zero functional effect, left alone deliberately rather than risking a `kill`/`pkill` call per §1's rule).
+- Always check `git status` yourself rather than trusting this section — it's a snapshot, not live state (see §7.2).
 
 The user reviews and commits all of this themselves, in whatever grouping they choose. Do not commit on their behalf unless explicitly asked, and even then, draft the message and let them run `git commit`.
 

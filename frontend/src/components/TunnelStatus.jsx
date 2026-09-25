@@ -26,7 +26,7 @@ function StatField({ icon: Icon, label, value, color }) {
   );
 }
 
-export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
+export default function TunnelStatus({ tunnelId, onTunnelDeleted, onStatusUpdate }) {
   const [status, setStatus] = useState(null);
   const [err, setErr] = useState(null);
   const [deleting, setDeleting] = useState(false);
@@ -40,6 +40,7 @@ export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
         if (!isMounted) return;
         setStatus(res.data);
         setErr(null);
+        onStatusUpdate?.(res.data);
         if (res.data.status !== "active" || res.data.timeLeftSeconds === 0) {
           clearInterval(intv);
           onTunnelDeleted?.();
@@ -57,7 +58,7 @@ export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
     pull();
     intv = setInterval(pull, 1000);
     return () => { isMounted = false; clearInterval(intv); };
-  }, [tunnelId, onTunnelDeleted]);
+  }, [tunnelId, onTunnelDeleted, onStatusUpdate]);
 
   async function handleDelete() {
     setDeleting(true);
@@ -76,7 +77,7 @@ export default function TunnelStatus({ tunnelId, onTunnelDeleted }) {
   const capMB = status?.dataCapBytes ? status.dataCapBytes / (1024 * 1024) : null;
   const usedMB = (status?.bytesTransferred || 0) / (1024 * 1024);
   const usagePct = capMB ? Math.min(100, (usedMB / capMB) * 100) : 0;
-  const endpoint = status?.serverIP ? `${status.serverIP}:51820` : "—";
+  const endpoint = status?.serverIP ? `${status.serverIP}:${status.listenPort}` : "—";
 
   return (
     <>

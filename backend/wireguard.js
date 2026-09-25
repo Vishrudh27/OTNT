@@ -91,6 +91,25 @@ async function deregisterIface(ifaceName) {
 }
 
 /**
+ * getNextFreeOTNTInterface/getNextFreeIP/getNextFreePort each read current
+ * usage, pick the first free slot, then reserve it — not atomic on their
+ * own. Two truly concurrent callers (e.g. two /api/tunnel/create requests
+ * landing close together) could both read the same "free" slot before
+ * either's reservation is written, and both walk away with the same
+ * iface/IP/port. index.js calls these directly, ahead of createTunnel()'s
+ * own tunnelCreationLock, so that lock never protected this. Serializing
+ * allocation here is the single choke point that closes it for every
+ * caller. The gate always resolves — even when the wrapped call throws —
+ * so one failed allocation can't permanently wedge later callers.
+ */
+let allocationLock = Promise.resolve();
+function withAllocationLock(fn) {
+  const result = allocationLock.then(fn, fn);
+  allocationLock = result.then(() => {}, () => {});
+  return result;
+}
+
+/**
  * Returns the lowest-numbered `otnt<N>` name that is free in BOTH the
  * Redis registry and the live kernel — checking the kernel too matters if
  * the registry and reality have ever diverged (e.g. a crash between
@@ -98,6 +117,9 @@ async function deregisterIface(ifaceName) {
  * collision on `wg-quick up` can't happen even in that edge case.
  */
 async function getNextFreeOTNTInterface() {
+  return withAllocationLock(() => _getNextFreeOTNTInterface());
+}
+async function _getNextFreeOTNTInterface() {
   const registered = await redis.sMembers(IFACE_REGISTRY_KEY);
   const taken = new Set(registered);
 
@@ -173,6 +195,9 @@ async function getUsedIPs() {
 
 // --- Pick next free IP dynamically ---
 async function getNextFreeIP(tunnelsMap = null) {
+  return withAllocationLock(() => _getNextFreeIP(tunnelsMap));
+}
+async function _getNextFreeIP(tunnelsMap = null) {
   const base = "10.77.0.";
   const used = await getUsedIPs();
 
@@ -263,6 +288,9 @@ async function getUsedPorts() {
 }
 
 async function getNextFreePort() {
+  return withAllocationLock(() => _getNextFreePort());
+}
+async function _getNextFreePort() {
   const used = await getUsedPorts();
   for (let p = PORT_RANGE_START; p <= PORT_RANGE_END; p++) {
     if (!used.has(p)) {

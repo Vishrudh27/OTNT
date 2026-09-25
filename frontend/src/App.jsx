@@ -371,10 +371,17 @@ export default function App() {
     setActiveTunnel(tunnelData); 
   };
   
-  const handleTunnelDeleted = () => { 
-    setActiveTunnel(null); 
-    setConfigReady(false); 
-    setDecryptedConfig(null); 
+  const handleTunnelDeleted = () => {
+    setActiveTunnel(null);
+    setConfigReady(false);
+    setDecryptedConfig(null);
+  };
+
+  const handleStatusUpdate = (status) => {
+    setActiveTunnel(prev => {
+      if (!prev || prev.ifaceName) return prev; // already populated, avoid re-render churn
+      return { ...prev, ifaceName: status.iface, serverIP: status.serverIP, clientIP: status.clientIP, listenPort: status.listenPort };
+    });
   };
 
   const handleExportLogs = () => {
@@ -418,13 +425,14 @@ export default function App() {
               />
             </Grid>
             
-            <TunnelStatus 
-              tunnelId={activeTunnel.tunnelId} 
-              onTunnelDeleted={handleTunnelDeleted} 
+            <TunnelStatus
+              tunnelId={activeTunnel.tunnelId}
+              onTunnelDeleted={handleTunnelDeleted}
+              onStatusUpdate={handleStatusUpdate}
             />
 
             <Grid item xs={12} md={4}>
-              <TunnelLifecycle 
+              <TunnelLifecycle
                 handshakeDone 
                 tunnelCreated 
                 configReady={configReady} 
@@ -468,9 +476,10 @@ export default function App() {
                 serverPublicKey={activeTunnel?.serverECDHPublicKey} 
               />
             </Grid>
-            <TunnelStatus 
-              tunnelId={activeTunnel.tunnelId} 
-              onTunnelDeleted={handleTunnelDeleted} 
+            <TunnelStatus
+              tunnelId={activeTunnel.tunnelId}
+              onTunnelDeleted={handleTunnelDeleted}
+              onStatusUpdate={handleStatusUpdate}
             />
           </Grid>
         );
