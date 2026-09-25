@@ -25,4 +25,12 @@ export const getTunnelStatus = (tunnelId) =>
 export const deleteTunnel = (tunnelId) =>
   api.post("/tunnel/delete", { tunnelId });
 
+// List all currently active tunnels
+export const listTunnels = () =>
+  api.get("/tunnel/list");
+
+// Ownership registry + Redis persistence snapshot
+export const getSystemStatus = () =>
+  api.get("/system/status");
+
 export default api;

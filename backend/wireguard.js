@@ -630,11 +630,44 @@ async function getTransferBytes(ifaceName) {
   return total;
 }
 
+// --- Registry snapshot (read-only, for the frontend's system/safety view) ---
+// Exposes the same Redis sets isOTNTOwned() checks against, so the UI can
+// show real reserved iface/IP/port names instead of just describing the
+// mechanism in prose.
+async function getRegistrySnapshot() {
+  const [ifaces, ips, ports] = await Promise.all([
+    redis.sMembers(IFACE_REGISTRY_KEY),
+    redis.sMembers(IP_REGISTRY_KEY),
+    redis.sMembers(PORT_REGISTRY_KEY)
+  ]);
+  return { ifaces: ifaces.sort(), ips: ips.map(Number).sort((a, b) => a - b), ports: ports.map(Number).sort((a, b) => a - b) };
+}
+
+// --- Get latest handshake age ---
+// Real signal for "is a client actually connected", distinct from
+// getTransferBytes(). `wg show <iface> latest-handshakes` prints a
+// unix-second timestamp per peer, 0 meaning "never handshaked" — returns
+// null for that case so callers can't mistake epoch-0 for a real time.
+async function getLatestHandshake(ifaceName) {
+  if (isWindows) return null;
+  if (!isValidIfaceName(ifaceName)) {
+    throw new Error(`[WG ERROR] Invalid ifaceName "${ifaceName}" passed to getLatestHandshake`);
+  }
+
+  const { stdout } = await exec(`sudo wg show ${ifaceName} latest-handshakes`);
+  const line = stdout.trim().split('\n')[0];
+  if (!line) return null;
+  const ts = parseInt(line.trim().split(/\s+/)[1], 10);
+  return ts ? ts : null;
+}
+
 module.exports = {
   createTunnel,
   deleteTunnel,
   removePeer,
   getTransferBytes,
+  getLatestHandshake,
+  getRegistrySnapshot,
   cleanupStaleTunnels,
   cleanupIface,
   getUsedIPs,

@@ -7,6 +7,7 @@ const tokens = {
   border: "#E5E5E2",         // Soft Gray Border
   primary: "#D97706",        // Copper Orange
   secondary: "#F59E0B",      // Amber Gold
+  accentDark: "#B45309",     // Darker copper — passes AA contrast on light backgrounds where primary/secondary text does not
   success: "#10B981",        // Emerald Highlight
   purple: "#8B5CF6",         // Secondary Highlight
   danger: "#EF4444",         // Crimson Red
@@ -37,9 +38,8 @@ const theme = createTheme({
       fontFamily: '"Space Grotesk", sans-serif',
       fontWeight: 600,
       color: tokens.textSecondary,
-      textTransform: "uppercase",
       fontSize: "0.7rem",
-      letterSpacing: "0.06em",
+      letterSpacing: "0.02em",
     },
     body2: { color: tokens.textSecondary, lineHeight: 1.6 },
   },

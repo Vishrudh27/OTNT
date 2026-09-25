@@ -138,6 +138,21 @@ const PORT = process.env.PORT || 3001;
  */
 const tunnels = new Map();
 
+/**
+ * Short-lived record of how/why a tunnel ended, keyed by tunnelId. Lets
+ * GET /api/tunnel/status/:id return a real "Destroyed" fact (410 + reason)
+ * instead of a bare 404 that forces the client to guess. In-memory only —
+ * a restart naturally drops stale tombstones, which is fine since nothing
+ * durable depends on them surviving a crash.
+ */
+const tombstones = new Map();
+const TOMBSTONE_TTL_MS = 5 * 60 * 1000;
+
+function recordTombstone(tunnelId, payload) {
+  tombstones.set(tunnelId, payload);
+  setTimeout(() => tombstones.delete(tunnelId), TOMBSTONE_TTL_MS).unref();
+}
+
 /** How often the data-cap monitor polls kernel transfer stats, in ms. */
 const DATA_MONITOR_INTERVAL_MS = 250;
 
@@ -311,6 +326,13 @@ async function terminateTunnel(tunnelId, t, reason) {
   }
   await wireguard.releaseIP(t.serverIP);
   await wireguard.releaseIP(t.clientIP);
+  recordTombstone(tunnelId, {
+    reason,
+    dataUsedBytes: t.dataUsed,
+    dataCapBytes: t.dataCap,
+    ifaceName: t.ifaceName,
+    terminatedAt: Date.now()
+  });
   tunnels.delete(tunnelId);
   try {
     await redisClient.deleteTunnel(tunnelId);
@@ -519,6 +541,7 @@ app.post('/api/tunnel/create', [
 
     t.ifaceName = result.ifaceName;
     t.listenPort = result.listenPort;
+    t.endpoint = finalEndpoint;
     t.peerPublicKey = peerPublicKey;
     t.clientIfaceName = `wg${tunnelId.slice(0, 8)}`;
 
@@ -593,7 +616,11 @@ app.post('/api/tunnel/:id/client-config', async (req, res) => {
 // --- Tunnel status ---
 app.get('/api/tunnel/status/:id', statusLimiter, async (req, res) => {
   const t = tunnels.get(req.params.id);
-  if (!t) return res.status(404).json({ error: 'Not found' });
+  if (!t) {
+    const tombstone = tombstones.get(req.params.id);
+    if (tombstone) return res.status(410).json(tombstone);
+    return res.status(404).json({ error: 'Not found' });
+  }
 
   try {
     try {
@@ -601,6 +628,14 @@ app.get('/api/tunnel/status/:id', statusLimiter, async (req, res) => {
       t.dataUsed = used; // only overwrite on a successful read
     } catch (e) {
       console.warn(`Status read error for ${t.id}:`, e.message);
+    }
+
+    let handshakeAgeSeconds = null;
+    try {
+      const ts = await wireguard.getLatestHandshake(t.ifaceName);
+      if (ts) handshakeAgeSeconds = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+    } catch (e) {
+      // No handshake yet, or iface not up — leave as null, not an error.
     }
 
     const timeLeft = t.expiry ? Math.max(0, Math.floor((t.expiry - Date.now()) / 1000)) : null;
@@ -611,6 +646,8 @@ app.get('/api/tunnel/status/:id', statusLimiter, async (req, res) => {
       listenPort: t.listenPort,
       serverIP: t.serverIP,
       clientIP: t.clientIP,
+      endpoint: t.endpoint,
+      handshakeAgeSeconds,
       timeLeftSeconds: timeLeft,
       bytesTransferred: t.dataUsed,
       dataCapBytes: t.dataCap,
@@ -636,7 +673,7 @@ app.post('/api/tunnel/delete', body('tunnelId').isString().notEmpty(), async (re
 
   try {
     await terminateTunnel(tunnelId, t, 'manually deleted');
-    res.json({ message: 'Deleted' });
+    res.json({ message: 'Deleted', ...tombstones.get(tunnelId) });
   } catch (e) {
     console.error('Delete tunnel error:', e);
     res.status(500).json({ error: e.message || 'Delete failed' });
@@ -654,6 +691,29 @@ app.get('/api/tunnel/list', (_req, res) => {
     expiresAt: t.expiry,
     dataCapBytes: t.dataCap
   })));
+});
+
+/**
+ * GET /api/system/status
+ * Read-only proof of the two backend properties invisible from the tunnel
+ * UI: the ownership registry (real reserved iface/IP/port names — see
+ * wireguard.js's isOTNTOwned() header comment) and Redis persistence
+ * (connection state + process uptime, so a backend restart is visibly
+ * demonstrable — tunnels survive, uptime doesn't).
+ */
+app.get('/api/system/status', async (_req, res) => {
+  try {
+    const registry = await wireguard.getRegistrySnapshot();
+    res.json({
+      activeTunnelCount: tunnels.size,
+      registry,
+      redisConnected: Boolean(redisClient.client.isReady),
+      backendUptimeSeconds: Math.floor(process.uptime())
+    });
+  } catch (e) {
+    console.error('System status error:', e);
+    res.status(500).json({ error: 'System status unavailable' });
+  }
 });
 
 // --- Startup crash-recovery cleanup ---

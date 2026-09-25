@@ -1,10 +1,9 @@
 // frontend/src/App.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { ThemeProvider, CssBaseline, Box, Grid, Typography, Chip, Tooltip, Paper, Button } from "@mui/material";
-import { 
-  Wifi, 
-  Server, 
-  Clock as ClockIcon, 
+import {
+  Wifi,
+  Clock as ClockIcon,
   Activity, 
   Shield, 
   Network, 
@@ -12,7 +11,9 @@ import {
   Database,
   Lock,
   Flame,
-  Download
+  Download,
+  Layers,
+  BarChart3
 } from "lucide-react";
 import theme, { tokens } from "./theme";
 import TunnelForm from "./components/TunnelForm";
@@ -21,6 +22,8 @@ import DownloadEncryptedConfig from "./components/DownloadEncryptedConfig";
 import SecureSessionCard from "./components/SecureSessionCard";
 import TunnelLifecycle from "./components/TunnelLifecycle";
 import HowItWorksPanel from "./components/HowItWorksPanel";
+import SystemPanel from "./components/SystemPanel";
+import ResultsPanel from "./components/ResultsPanel";
 
 function LiveClock() {
   const [now, setNow] = useState(new Date());
@@ -38,56 +41,57 @@ function Sidebar({ activeTab, onTabClick }) {
     { label: "Tunnel", icon: Shield },
     { label: "Lifecycle", icon: Network },
     { label: "Configuration", icon: Fingerprint },
+    { label: "System", icon: Layers },
+    { label: "Results", icon: BarChart3 },
     { label: "Logs", icon: Database },
   ];
 
   return (
     <Box sx={{
-      width: "80px",
-      minHeight: "calc(100vh - 48px)",
+      width: "100%",
       bgcolor: "rgba(255, 255, 255, 0.45)",
       backdropFilter: "blur(16px)",
       border: `1px solid ${tokens.border}`,
-      borderRadius: "24px",
+      borderRadius: "20px",
       display: "flex",
-      flexDirection: "column",
       alignItems: "center",
-      py: 4,
-      gap: 4,
+      px: 2.5,
+      py: 1.5,
+      gap: 2.5,
       position: "sticky",
-      top: 24,
+      top: 16,
       zIndex: 10,
     }}>
       {/* Brand Logo Icon */}
-      <Tooltip title="OTNT Secure Portal" placement="right">
+      <Tooltip title="OTNT Secure Portal" placement="bottom">
         <Box sx={{
-          width: 46,
-          height: 46,
-          borderRadius: "14px",
+          width: 40,
+          height: 40,
+          minWidth: 40,
+          borderRadius: "12px",
           background: `linear-gradient(135deg, ${tokens.primary} 0%, #B45309 100%)`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           boxShadow: "0 4px 15px rgba(217, 119, 6, 0.15)",
-          mb: 2
         }}>
-          <Lock size={20} color="#FFFFFF" />
+          <Lock size={18} color="#FFFFFF" />
         </Box>
       </Tooltip>
 
       {/* Nav items */}
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, width: "100%", alignItems: "center" }}>
+      <Box sx={{ display: "flex", gap: 1.2, flexWrap: "wrap" }}>
         {navItems.map((item, idx) => {
           const IconComponent = item.icon;
           const isActive = item.label === activeTab;
           return (
-            <Tooltip key={idx} title={item.label} placement="right">
-              <Box 
+            <Tooltip key={idx} title={item.label} placement="bottom">
+              <Box
                 onClick={() => onTabClick(item.label)}
                 sx={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: "14px",
+                  width: 40,
+                  height: 40,
+                  borderRadius: "12px",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -99,19 +103,19 @@ function Sidebar({ activeTab, onTabClick }) {
                   "&:hover": {
                     color: tokens.primary,
                     bgcolor: "rgba(217, 119, 6, 0.04)",
-                    transform: "translateX(2px)"
+                    transform: "translateY(-1px)"
                   }
                 }}
               >
-                <IconComponent size={20} />
+                <IconComponent size={18} />
               </Box>
             </Tooltip>
           );
         })}
       </Box>
 
-      {/* Footer Status Icon */}
-      <Box sx={{ mt: "auto" }}>
+      {/* Status Icon */}
+      <Box sx={{ ml: "auto", pr: 0.5 }}>
         <Box className="pulse-indicator" sx={{
           width: 8,
           height: 8,
@@ -128,35 +132,37 @@ function Sidebar({ activeTab, onTabClick }) {
 function LogsConsole({ logs }) {
   return (
     <Paper sx={{
-      p: 4,
+      p: 3,
       borderRadius: "24px",
-      bgcolor: "#111111", // Terminal is dark graphite
+      bgcolor: "rgba(255, 255, 255, 0.45)",
+      backdropFilter: "blur(16px)",
       border: `1px solid ${tokens.border}`,
-      fontFamily: "monospace",
       display: "flex",
       flexDirection: "column",
       gap: 1.5,
       height: "100%",
       minHeight: "450px",
-      boxShadow: "inset 0 0 20px rgba(0,0,0,0.8)"
     }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, borderBottom: "1px solid #2A2A2E", pb: 1.5, mb: 1 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, borderBottom: `1px solid ${tokens.border}`, pb: 1.5, mb: 1 }}>
         <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: tokens.primary }} />
-        <Typography variant="body2" sx={{ color: "#F7F4ED", fontWeight: 700, fontFamily: '"Space Grotesk", sans-serif' }}>
-          Console Log Monitor — audit.log
+        <Typography variant="body2" sx={{ color: tokens.text, fontWeight: 700, fontFamily: '"Space Grotesk", sans-serif' }}>
+          Session Timeline
         </Typography>
       </Box>
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 1.2, overflowY: "auto", flexGrow: 1 }}>
+      <Box sx={{
+        display: "flex", flexDirection: "column", gap: 1.2, overflowY: "auto", flexGrow: 1,
+        p: 2.5, borderRadius: "14px", bgcolor: "rgba(0, 0, 0, 0.02)", border: `1px solid ${tokens.border}`
+      }}>
         {logs.map((log, i) => {
           let logColor = tokens.textSecondary;
           if (log.includes("AUDIT")) {
             logColor = tokens.success;
           } else if (log.includes("SYS")) {
-            logColor = "#A7A3A0";
+            logColor = tokens.text;
           }
           return (
-            <Typography key={i} sx={{ 
-              fontSize: "0.75rem", 
+            <Typography key={i} sx={{
+              fontSize: "0.75rem",
               color: logColor,
               lineHeight: 1.6,
               fontFamily: "monospace"
@@ -174,7 +180,7 @@ function LogsConsole({ logs }) {
 function ConfigPlaintextPreview({ decryptedConfig }) {
   return (
     <Paper sx={{
-      p: 4,
+      p: 3,
       borderRadius: "24px",
       bgcolor: "rgba(255, 255, 255, 0.45)",
       backdropFilter: "blur(16px)",
@@ -196,15 +202,15 @@ function ConfigPlaintextPreview({ decryptedConfig }) {
         <Box sx={{
           p: 3,
           borderRadius: "14px",
-          bgcolor: "#111111",
-          border: "1px solid #2A2A2E",
+          bgcolor: "rgba(0, 0, 0, 0.02)",
+          border: `1px solid ${tokens.border}`,
           overflowX: "auto"
         }}>
           <pre style={{
             margin: 0,
             fontFamily: "monospace",
             fontSize: "0.78rem",
-            color: "#F7F4ED",
+            color: tokens.text,
             lineHeight: 1.6,
             textAlign: "left"
           }}>{decryptedConfig}</pre>
@@ -234,16 +240,16 @@ function ConfigPlaintextPreview({ decryptedConfig }) {
 // Stage Diagnostics for Lifecycle page
 function StageDiagnostics({ activeTunnel, configReady }) {
   const diagnostics = [
-    { name: "Client generation", duration: activeTunnel ? "12 ms" : "—", status: activeTunnel ? "Completed" : "Pending", color: activeTunnel ? tokens.success : tokens.textSecondary },
-    { name: "ECDH Handshake", duration: activeTunnel ? "198 ms" : "—", status: activeTunnel ? "Completed" : "Pending", color: activeTunnel ? tokens.success : tokens.textSecondary },
-    { name: "WG Interface Configuration", duration: activeTunnel ? "220 ms" : "—", status: activeTunnel ? "Completed" : "Pending", color: activeTunnel ? tokens.success : tokens.textSecondary },
-    { name: "AES-GCM Local Decryption", duration: configReady ? "8 ms" : "—", status: configReady ? "Completed" : "Pending", color: configReady ? tokens.success : tokens.textSecondary },
-    { name: "Expiry Monitor Service", duration: activeTunnel ? "Active" : "—", status: activeTunnel ? "Running" : "Pending", color: activeTunnel ? tokens.primary : tokens.textSecondary },
+    { name: "Client generation", status: activeTunnel ? "Completed" : "Pending", color: activeTunnel ? tokens.success : tokens.textSecondary },
+    { name: "ECDH Handshake", status: activeTunnel ? "Completed" : "Pending", color: activeTunnel ? tokens.success : tokens.textSecondary },
+    { name: "WG Interface Configuration", status: activeTunnel ? "Completed" : "Pending", color: activeTunnel ? tokens.success : tokens.textSecondary },
+    { name: "AES-GCM Local Decryption", status: configReady ? "Completed" : "Pending", color: configReady ? tokens.success : tokens.textSecondary },
+    { name: "Expiry Monitor Service", status: activeTunnel ? "Running" : "Pending", color: activeTunnel ? tokens.primary : tokens.textSecondary },
   ];
 
   return (
     <Paper sx={{
-      p: 4,
+      p: 3,
       borderRadius: "24px",
       bgcolor: "rgba(255, 255, 255, 0.45)",
       backdropFilter: "blur(16px)",
@@ -257,23 +263,18 @@ function StageDiagnostics({ activeTunnel, configReady }) {
         <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, mb: 1, color: tokens.text }}>
           Stage Diagnostics
         </Typography>
-        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 3, fontSize: "0.82rem" }}>
-          Measured performance logs per lifecycle milestone.
+        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 2, fontSize: "0.82rem" }}>
+          Lifecycle milestone status.
         </Typography>
 
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {diagnostics.map((d, i) => (
             <Box key={i} sx={{ pb: 1.5, borderBottom: i < diagnostics.length - 1 ? `1.5px solid ${tokens.border}` : "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <Box>
-                <Typography variant="body2" sx={{ color: tokens.text, fontWeight: 600, fontSize: "0.8rem" }}>
-                  {d.name}
-                </Typography>
-                <Typography variant="body2" sx={{ color: tokens.textSecondary, fontSize: "0.72rem" }}>
-                  Status: <b style={{ color: d.color }}>{d.status}</b>
-                </Typography>
-              </Box>
-              <Typography sx={{ fontFamily: "monospace", fontSize: "0.82rem", fontWeight: 700, color: tokens.text }}>
-                {d.duration}
+              <Typography variant="body2" sx={{ color: tokens.text, fontWeight: 600, fontSize: "0.8rem" }}>
+                {d.name}
+              </Typography>
+              <Typography sx={{ fontFamily: "monospace", fontSize: "0.78rem", fontWeight: 700, color: d.color }}>
+                {d.status}
               </Typography>
             </Box>
           ))}
@@ -293,7 +294,7 @@ function LogActionsPanel({ activeTunnel, onExport }) {
 
   return (
     <Paper sx={{
-      p: 4,
+      p: 3,
       borderRadius: "24px",
       bgcolor: "rgba(255, 255, 255, 0.45)",
       backdropFilter: "blur(16px)",
@@ -307,11 +308,11 @@ function LogActionsPanel({ activeTunnel, onExport }) {
         <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, mb: 1, color: tokens.text }}>
           Connection Info
         </Typography>
-        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 3, fontSize: "0.82rem" }}>
+        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 2, fontSize: "0.82rem" }}>
           Legitimate interface variables mapped from the WireGuard controller.
         </Typography>
 
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mb: 4 }}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, mb: 2.5 }}>
           {tunnelStats.map((stat, i) => (
             <Box key={i} sx={{ pb: 1.5, borderBottom: i < tunnelStats.length - 1 ? `1.5px solid ${tokens.border}` : "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <Typography variant="body2" sx={{ color: tokens.textSecondary, fontWeight: 600, fontSize: "0.78rem" }}>
@@ -333,7 +334,7 @@ function LogActionsPanel({ activeTunnel, onExport }) {
         startIcon={<Download size={14} />}
         sx={{ py: 1.3, fontWeight: 700 }}
       >
-        Export audit.log
+        Export session timeline
       </Button>
     </Paper>
   );
@@ -345,6 +346,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("Dashboard");
   const [decryptedConfig, setDecryptedConfig] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [tombstone, setTombstone] = useState(null);
 
   // Generate logs tracking only actual client actions
   useEffect(() => {
@@ -365,31 +367,48 @@ export default function App() {
     setLogs(lines);
   }, [activeTunnel, configReady]);
 
-  const handleTunnelCreated = (tunnelData) => { 
-    setConfigReady(false); 
-    setDecryptedConfig(null); 
-    setActiveTunnel(tunnelData); 
+  const handleTunnelCreated = (tunnelData) => {
+    setConfigReady(false);
+    setDecryptedConfig(null);
+    setTombstone(null);
+    setActiveTunnel(tunnelData);
   };
-  
-  const handleTunnelDeleted = () => {
+
+  const handleTunnelDeleted = useCallback(() => {
     setActiveTunnel(null);
     setConfigReady(false);
     setDecryptedConfig(null);
-  };
+    setTombstone(null);
+  }, []);
 
-  const handleStatusUpdate = (status) => {
+  const handleTunnelDestroyed = useCallback((payload) => {
+    setTombstone(payload);
+  }, []);
+
+  // Only two facts here ever actually change over a tunnel's life (iface
+  // gets set once at creation, handshake flips false->true once a real
+  // client connects) — bail out on every other tick so this never
+  // re-renders App on the 1s status-poll cadence.
+  const handleStatusUpdate = useCallback((status) => {
     setActiveTunnel(prev => {
-      if (!prev || prev.ifaceName) return prev; // already populated, avoid re-render churn
-      return { ...prev, ifaceName: status.iface, serverIP: status.serverIP, clientIP: status.clientIP, listenPort: status.listenPort };
+      if (!prev) return prev;
+      const ifaceNeedsSet = !prev.ifaceName && status.iface;
+      const handshakeNeedsSet = !prev.hasHandshake && status.handshakeAgeSeconds != null;
+      if (!ifaceNeedsSet && !handshakeNeedsSet) return prev;
+      return {
+        ...prev,
+        ...(ifaceNeedsSet ? { ifaceName: status.iface, serverIP: status.serverIP, clientIP: status.clientIP, listenPort: status.listenPort, endpoint: status.endpoint } : {}),
+        ...(handshakeNeedsSet ? { hasHandshake: true } : {})
+      };
     });
-  };
+  }, []);
 
   const handleExportLogs = () => {
     const blob = new Blob([logs.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `otnt_audit_${Date.now()}.log`;
+    a.download = `otnt_session_timeline_${Date.now()}.txt`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -401,7 +420,7 @@ export default function App() {
     if (activeTab === "Dashboard") {
       if (!activeTunnel) {
         return (
-          <Grid container spacing={4} alignItems="stretch">
+          <Grid container spacing={2.5} alignItems="stretch">
             <Grid item xs={12} md={5}>
               <Box sx={{ height: "100%" }}>
                 <TunnelForm onTunnelCreated={handleTunnelCreated} />
@@ -416,30 +435,33 @@ export default function App() {
         );
       } else {
         return (
-          <Grid container spacing={4}>
-            <Grid item xs={12} md={4}>
-              <SecureSessionCard 
-                visible 
-                clientPublicKey={activeTunnel?.clientWG?.publicKey} 
-                serverPublicKey={activeTunnel?.serverECDHPublicKey} 
-              />
-            </Grid>
-            
+          <Grid container spacing={2.5} alignItems="stretch">
+            {/* Live tunnel state leads — this is the thing that matters right now */}
             <TunnelStatus
               tunnelId={activeTunnel.tunnelId}
               onTunnelDeleted={handleTunnelDeleted}
+              onTunnelDestroyed={handleTunnelDestroyed}
               onStatusUpdate={handleStatusUpdate}
             />
 
             <Grid item xs={12} md={4}>
-              <TunnelLifecycle
-                handshakeDone 
-                tunnelCreated 
-                configReady={configReady} 
-                connected={configReady} 
+              <SecureSessionCard
+                visible
+                clientPublicKey={activeTunnel?.clientWG?.publicKey}
+                serverPublicKey={activeTunnel?.serverECDHPublicKey}
               />
             </Grid>
-            
+
+            <Grid item xs={12} md={4}>
+              <TunnelLifecycle
+                handshakeDone
+                tunnelCreated
+                configReady={configReady}
+                connected={!!activeTunnel?.hasHandshake}
+                destroyed={!!tombstone}
+              />
+            </Grid>
+
             <DownloadEncryptedConfig
               tunnelId={activeTunnel.tunnelId}
               clientPrivateKey={activeTunnel.clientWG?.privateKey}
@@ -448,10 +470,6 @@ export default function App() {
                 setDecryptedConfig(plaintext);
               }}
             />
-
-            <Grid item xs={12}>
-              <HowItWorksPanel />
-            </Grid>
           </Grid>
         );
       }
@@ -460,7 +478,7 @@ export default function App() {
     if (activeTab === "Tunnel") {
       if (!activeTunnel) {
         return (
-          <Grid container spacing={4} justifyContent="center">
+          <Grid container spacing={2.5} justifyContent="center">
             <Grid item xs={12} md={6}>
               <TunnelForm onTunnelCreated={handleTunnelCreated} />
             </Grid>
@@ -468,10 +486,10 @@ export default function App() {
         );
       } else {
         return (
-          <Grid container spacing={4}>
+          <Grid container spacing={2.5} alignItems="stretch">
             <Grid item xs={12} md={4}>
-              <SecureSessionCard 
-                visible 
+              <SecureSessionCard
+                visible
                 clientPublicKey={activeTunnel?.clientWG?.publicKey} 
                 serverPublicKey={activeTunnel?.serverECDHPublicKey} 
               />
@@ -479,6 +497,7 @@ export default function App() {
             <TunnelStatus
               tunnelId={activeTunnel.tunnelId}
               onTunnelDeleted={handleTunnelDeleted}
+              onTunnelDestroyed={handleTunnelDestroyed}
               onStatusUpdate={handleStatusUpdate}
             />
           </Grid>
@@ -499,13 +518,14 @@ export default function App() {
         );
       } else {
         return (
-          <Grid container spacing={4} alignItems="stretch">
+          <Grid container spacing={2.5} alignItems="stretch">
             <Grid item xs={12} md={8}>
-              <TunnelLifecycle 
-                handshakeDone 
-                tunnelCreated 
-                configReady={configReady} 
-                connected={configReady} 
+              <TunnelLifecycle
+                handshakeDone
+                tunnelCreated
+                configReady={configReady}
+                connected={!!activeTunnel?.hasHandshake}
+                destroyed={!!tombstone}
               />
             </Grid>
             <Grid item xs={12} md={4}>
@@ -529,7 +549,7 @@ export default function App() {
         );
       } else {
         return (
-          <Grid container spacing={4}>
+          <Grid container spacing={2.5} alignItems="stretch">
             <DownloadEncryptedConfig
               tunnelId={activeTunnel.tunnelId}
               clientPrivateKey={activeTunnel.clientWG?.privateKey}
@@ -547,9 +567,17 @@ export default function App() {
       }
     }
 
+    if (activeTab === "System") {
+      return <SystemPanel />;
+    }
+
+    if (activeTab === "Results") {
+      return <ResultsPanel />;
+    }
+
     if (activeTab === "Logs") {
       return (
-        <Grid container spacing={4} alignItems="stretch">
+        <Grid container spacing={2.5} alignItems="stretch">
           <Grid item xs={12} md={8}>
             <LogsConsole logs={logs} />
           </Grid>
@@ -577,7 +605,7 @@ export default function App() {
       <Box sx={{
         minHeight: "100vh",
         bgcolor: "transparent", // background handled by body radial grid
-        p: { xs: 2.5, md: 4 },
+        p: { xs: 2, md: 3 },
         display: "flex",
         justifyContent: "center",
         position: "relative",
@@ -587,13 +615,14 @@ export default function App() {
           width: "100%",
           maxWidth: "1500px",
           display: "flex",
-          gap: 4,
+          flexDirection: "column",
+          gap: 3,
         }}>
-          {/* Left Sidebar */}
+          {/* Top nav bar */}
           <Sidebar activeTab={activeTab} onTabClick={setActiveTab} />
 
           {/* Main Dashboard Area */}
-          <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+          <Box sx={{ flexGrow: 1, display: "flex", flexDirection: "column", gap: 3 }}>
             {/* Header */}
             <Box sx={{
               p: 3,
@@ -641,12 +670,6 @@ export default function App() {
                   <Wifi size={16} color={activeTunnel ? tokens.success : tokens.textSecondary} />
                   <Typography variant="body2" sx={{ fontSize: "0.82rem" }}>
                     Iface: <b style={{ color: activeTunnel ? tokens.success : tokens.text }}>{activeTunnel?.ifaceName || "None"}</b>
-                  </Typography>
-                </Box>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <Server size={16} color={tokens.textSecondary} />
-                  <Typography variant="body2" sx={{ fontSize: "0.82rem" }}>
-                    Node: <b style={{ color: tokens.text }}>active-linux-host</b>
                   </Typography>
                 </Box>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>

@@ -38,7 +38,7 @@ export default function TunnelForm({ onTunnelCreated }) {
       onTunnelCreated({ tunnelId, serverECDHPublicKey: res.data.serverECDHPublicKey, clientWG: wg, ...createRes.data });
     } catch (e) {
       console.error("Tunnel creation failed:", e);
-      setError(e.response?.data?.error || "Failed to create tunnel");
+      setError(e.response?.data?.error || "Couldn't create the tunnel — check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -51,7 +51,7 @@ export default function TunnelForm({ onTunnelCreated }) {
       onSubmit={onSubmit}
       className="animate-fade-in-up"
       sx={{
-        p: 4,
+        p: 3,
         borderRadius: "24px",
         height: "100%",
         display: "flex",
@@ -69,15 +69,15 @@ export default function TunnelForm({ onTunnelCreated }) {
             Create Secure Tunnel
           </Typography>
         </Box>
-        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 3, fontSize: "0.82rem" }}>
+        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 2, fontSize: "0.82rem" }}>
           Spin up a dynamic, self-destructing WireGuard connection.
         </Typography>
 
         {error && (
-          <Alert 
-            severity="error" 
-            sx={{ 
-              mb: 3, 
+          <Alert
+            severity="error"
+            sx={{
+              mb: 2,
               borderRadius: "14px", 
               bgcolor: "rgba(239, 68, 68, 0.1)", 
               border: `1px solid rgba(239, 68, 68, 0.2)`, 

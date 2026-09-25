@@ -12,13 +12,13 @@ const STAGES = [
   { key: "destroy", label: "Self-Destruct", icon: Timer, description: "Time/Cap expiry" },
 ];
 
-export default function TunnelLifecycle({ handshakeDone, tunnelCreated, configReady, connected }) {
-  const doneMap = { 
-    handshake: handshakeDone, 
-    created: tunnelCreated, 
-    config: configReady, 
-    connected, 
-    destroy: false 
+export default function TunnelLifecycle({ handshakeDone, tunnelCreated, configReady, connected, destroyed }) {
+  const doneMap = {
+    handshake: handshakeDone,
+    created: tunnelCreated,
+    config: configReady,
+    connected,
+    destroy: !!destroyed
   };
 
   return (
@@ -26,7 +26,7 @@ export default function TunnelLifecycle({ handshakeDone, tunnelCreated, configRe
       elevation={0}
       className="animate-fade-in-up"
       sx={{
-        p: 4,
+        p: 3,
         borderRadius: "24px",
         height: "100%",
         display: "flex",
@@ -41,7 +41,7 @@ export default function TunnelLifecycle({ handshakeDone, tunnelCreated, configRe
         <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, mb: 1, color: tokens.text }}>
           Tunnel Lifecycle State
         </Typography>
-        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 4, fontSize: "0.82rem" }}>
+        <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 2.5, fontSize: "0.82rem" }}>
           Real-time tracking of the ephemeral tunnel sequence.
         </Typography>
 
@@ -141,8 +141,9 @@ export default function TunnelLifecycle({ handshakeDone, tunnelCreated, configRe
       }}>
         <Typography variant="body2" sx={{ fontSize: "0.72rem", color: tokens.textSecondary }}>
           ℹ️ <b>Active State Details:</b> {
-            connected ? "Config loaded client-side. System fully connected." :
-            configReady ? "Decryption successful. Ready for client import." :
+            destroyed ? "Tunnel destroyed. Interface removed, keys discarded." :
+            connected ? "WireGuard handshake confirmed. Tunnel fully connected." :
+            configReady ? "Decryption successful. Awaiting real WireGuard handshake." :
             tunnelCreated ? "Interface active on host. Awaiting local decryption." :
             "Initiating cryptographic session..."
           }

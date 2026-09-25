@@ -20,7 +20,7 @@ function CopyableRow({ label, value }) {
     } catch {}
   }
   return (
-    <Box sx={{ py: 2, borderBottom: `1px solid ${tokens.border}` }}>
+    <Box sx={{ py: 1.5, borderBottom: `1px solid ${tokens.border}` }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
         <Fingerprint size={14} color={tokens.textSecondary} />
         <Typography variant="subtitle2" sx={{ fontSize: "0.68rem" }}>{label}</Typography>
@@ -46,7 +46,7 @@ export default function SecureSessionCard({ visible, clientPublicKey, serverPubl
         elevation={0}
         className="animate-slide-left"
         sx={{
-          p: 4,
+          p: 3,
           borderRadius: "24px",
           height: "100%",
           display: "flex",

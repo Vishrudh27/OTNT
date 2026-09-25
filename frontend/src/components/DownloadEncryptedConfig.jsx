@@ -56,7 +56,7 @@ export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, on
       downloadAsFile(plaintext, fileName);
     } catch (err) {
       console.error("Error fetching/decrypting config:", err);
-      setError(err?.response?.data?.error || err.message);
+      setError(err?.response?.data?.error || "Couldn't decrypt the configuration — check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -70,7 +70,7 @@ export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, on
           elevation={0}
           className="animate-fade-in-up"
           sx={{
-            p: 4,
+            p: 3,
             borderRadius: "24px",
             height: "100%",
             display: "flex",
@@ -85,15 +85,15 @@ export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, on
             <Typography variant="h6" sx={{ fontSize: "1.1rem", fontWeight: 700, mb: 1, color: tokens.text }}>
               Configuration Package
             </Typography>
-            <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 3, fontSize: "0.82rem" }}>
+            <Typography variant="body2" sx={{ color: tokens.textSecondary, mb: 2, fontSize: "0.82rem" }}>
               Request and decrypt the ephemeral WireGuard configuration profile.
             </Typography>
 
             {error && (
-              <Alert 
-                severity="error" 
-                sx={{ 
-                  mb: 3, 
+              <Alert
+                severity="error"
+                sx={{
+                  mb: 2,
                   borderRadius: "14px", 
                   bgcolor: "rgba(239, 68, 68, 0.1)", 
                   border: `1px solid rgba(239, 68, 68, 0.2)`, 
@@ -135,7 +135,7 @@ export default function DownloadEncryptedConfig({ tunnelId, clientPrivateKey, on
           elevation={0}
           className="animate-fade-in-up"
           sx={{
-            p: 4,
+            p: 3,
             borderRadius: "24px",
             height: "100%",
             display: "flex",
