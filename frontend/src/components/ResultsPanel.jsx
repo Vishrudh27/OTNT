@@ -14,7 +14,7 @@ const CHART = {
   neutral2: "#9C8563", // muted taupe — a second "neutral" bar alongside CHART.neutral, same family, distinguishable
   bad: "#C2410C",     // rich terracotta — risk / worst result
   paper: "#FAF8F3",
-  goldShades: ["#E3B23C", "#CA8A04", "#A87104", "#8C5E03"], // same-hue gradient for same-finding multi-bar sets
+  brownShades: ["#A9825C", "#8B6440", "#6B4A2E", "#4A3220"], // same-hue gradient for same-finding multi-bar sets
 };
 const SERIF = 'Georgia, "Times New Roman", serif';
 
@@ -180,10 +180,10 @@ export default function ResultsPanel() {
             axisLabels={["0ms", "200ms", "400ms", "600ms", "800ms"]}
             max={800}
             data={[
-              { label: "5s target", value: 554.9, valueLabel: "555ms", color: CHART.goldShades[0] },
-              { label: "10s target", value: 679.8, valueLabel: "680ms", color: CHART.goldShades[1] },
-              { label: "15s target", value: 653.1, valueLabel: "653ms", color: CHART.goldShades[2] },
-              { label: "20s target", value: 625.1, valueLabel: "625ms", color: CHART.goldShades[3] },
+              { label: "5s target", value: 554.9, valueLabel: "555ms", color: CHART.brownShades[0] },
+              { label: "10s target", value: 679.8, valueLabel: "680ms", color: CHART.brownShades[1] },
+              { label: "15s target", value: 653.1, valueLabel: "653ms", color: CHART.brownShades[2] },
+              { label: "20s target", value: 625.1, valueLabel: "625ms", color: CHART.brownShades[3] },
             ]}
           />
           <Headline>~550–680ms, flat band</Headline>
